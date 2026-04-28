@@ -2,6 +2,12 @@ name: Sync Better India Directory
 
 on:
   workflow_dispatch:
+    inputs:
+      requested_by:
+        description: Who requested this sync
+        required: false
+        type: string
+        default: admin
   schedule:
     - cron: "30 */6 * * *"
 
@@ -9,13 +15,21 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Supabase sync
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Better India sync
         env:
-          SYNC_URL: ${{ secrets.BETTER_INDIA_SYNC_URL }}
-          SYNC_TOKEN: ${{ secrets.BETTER_INDIA_SYNC_TOKEN }}
-        run: |
-          test -n "$SYNC_URL"
-          test -n "$SYNC_TOKEN"
-          curl --fail-with-body -X POST "$SYNC_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"action\":\"scheduledSync\",\"cronToken\":\"$SYNC_TOKEN\"}"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BETTER_INDIA_REQUESTED_BY: ${{ inputs.requested_by || 'scheduled' }}
+        run: npm run sync:better-india

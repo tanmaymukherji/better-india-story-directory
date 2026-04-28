@@ -13,7 +13,8 @@ Included app surfaces:
 - Shared Supabase loader: `innovation-store.js`
 - Supabase migration: `supabase/migrations/20260428170000_create_better_india_story_directory.sql`
 - Supabase edge function: `supabase/functions/better-india-admin/index.ts`
-- Optional scheduled sync workflow: `.github/workflows/sync-better-india-directory.yml`
+- External crawler script: `scripts/sync-better-india.mjs`
+- Scheduled/manual sync workflow: `.github/workflows/sync-better-india-directory.yml`
 
 What this app supports:
 - Search by keyword, name, place, and thematic area
@@ -24,19 +25,26 @@ What this app supports:
 - Batch syncs that process 10 stories at a time
 - Backlog-first crawling of old stories while also checking for newly published stories
 - Story-processing state so already summarised links are not reprocessed unnecessarily
+- Lightweight admin trigger that queues GitHub Actions instead of running the crawl inside Supabase
 
 Backend setup notes:
 - Run the SQL migrations in `supabase/migrations`
 - Deploy the `better-india-admin` edge function
-- Set function secrets for:
+- Set Supabase function secrets for:
   - `SUPABASE_URL`
   - `SUPABASE_SERVICE_ROLE_KEY` or `SELCO_VENDOR_SERVICE_ROLE_KEY`
-  - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-  - `BETTER_INDIA_SYNC_CRON_TOKEN` if you want scheduled syncs
+  - `GITHUB_ACTIONS_TOKEN` or `GITHUB_PAT`
+  - `GITHUB_REPO_OWNER` default `tanmaymukherji`
+  - `GITHUB_REPO_NAME` default `better-india-story-directory`
+  - `GITHUB_WORKFLOW_ID` default `sync-better-india-directory.yml`
+
+GitHub Actions secrets for the crawler workflow:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `GEMINI_API_KEY`
 
 Static frontend config:
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `MAPMYINDIA_MAP_KEY`
 - `BETTER_INDIA_STORIES_TABLE`
-

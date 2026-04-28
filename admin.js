@@ -229,13 +229,13 @@ async function loadStorySyncRuns() {
 
 async function runStorySync() {
   runStorySyncButton.disabled = true;
-  setStatus(sessionStatus, 'Running Better India story sync...');
+  setStatus(sessionStatus, 'Queueing Better India story sync...');
   try {
     const data = await window.BetterIndiaStore.adminRequest('syncBetterIndiaStories', { token: getStoredToken() });
-    setStatus(sessionStatus, `Better India sync completed: ${data.storyCount || 0} stories processed.`);
-    await Promise.all([loadStorySyncRuns(), loadAdminStories()]);
+    setStatus(sessionStatus, data.message || 'Better India sync queued in GitHub Actions.');
+    await loadStorySyncRuns();
   } catch (error) {
-    setStatus(sessionStatus, error.message || 'Better India sync failed.', true);
+    setStatus(sessionStatus, error.message || 'Better India sync could not be queued.', true);
   } finally {
     runStorySyncButton.disabled = false;
   }
@@ -339,4 +339,3 @@ adminEditForm.addEventListener('submit', saveStoryEdits);
     await Promise.all([loadStorySyncRuns(), loadAdminStories()]);
   }
 })();
-
