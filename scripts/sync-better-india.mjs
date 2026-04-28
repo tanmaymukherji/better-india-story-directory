@@ -375,10 +375,10 @@ function buildDisplaySummary(summary, contributors = [], processSteps = []) {
 }
 
 function buildInvolvedPeopleName(primaryName, contributors = []) {
-  const names = dedupe([
-    primaryName,
-    ...contributors.map((item) => item?.name),
-  ]);
+  const contributorNames = dedupe(contributors.map((item) => item?.name));
+  const names = contributorNames.length
+    ? contributorNames
+    : dedupe([primaryName]);
   if (!names.length) return 'Unknown Person';
   if (names.length === 1) return names[0];
   if (names.length <= 3) return names.join(', ');
