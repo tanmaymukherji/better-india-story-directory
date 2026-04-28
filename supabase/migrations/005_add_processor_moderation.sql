@@ -1,0 +1,1 @@
+-- Placeholder migration to match the linked Supabase project's existing history.
