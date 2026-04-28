@@ -18,6 +18,14 @@ const GEMINI_REQUEST_DELAY_MS = Math.max(0, Number(process.env.GEMINI_REQUEST_DE
 const GEMINI_MAX_STORY_CHARS = Math.max(3000, Number(process.env.GEMINI_MAX_STORY_CHARS || 9000));
 const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 20));
 const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
+const SIX_M_SIGNAL_MAP = {
+  Manpower: /\b(training|trainings|trainer|trainers|trainee|trainees|capacity building|skill building|workshop|workshops)\b/i,
+  Method: /\b(consulting|consultancy|consultant|mentoring|mentor|technology transfer|process|processes|workflow|protocol|sop|sops|standard operating procedure|manual|manuals|blog|blogs|video|videos|guide|guides)\b/i,
+  Material: /\b(raw material|raw materials|material supply|supply of materials|input supply|feedstock)\b/i,
+  Machine: /\b(machine|machines|machinery|equipment|plant setup|plant installation|production line|processing unit|tooling)\b/i,
+  Money: /\b(financial support|funding support|grant|grants|loan|loans|credit support|working capital|subsidy|subsidies|investment support)\b/i,
+  Market: /\b(product purchase|material purchase|procurement|market support|market linkage|market linkages|market report|buyer support|sales channel|distribution support)\b/i,
+};
 const USER_AGENT = 'Better India Story Directory Sync/2.0';
 let availableGeminiModelsPromise = null;
 
@@ -159,16 +167,8 @@ function inferSixMHeuristically(text) {
   const haystack = normalizeText(text);
   if (!haystack) return [];
   const matches = [];
-  const signalMap = {
-    Manpower: /\b(volunteer|community|workers?|women|self-help group|students?|youth|farmers?|artisans?|team|collective|members?)\b/i,
-    Method: /\b(training|model|process|practice|approach|campaign|awareness|education|technique|system|intervention|recycling|conservation)\b/i,
-    Material: /\b(waste|plastic|bamboo|coir|fabric|compost|seed|soil|biodegradable|material|raw material|produce)\b/i,
-    Machine: /\b(machine|device|tool|equipment|app|technology|platform|drone|solar|mechanical|digital|ai)\b/i,
-    Money: /\b(income|livelihood|funding|loan|saving|finance|revenue|earnings|salary|profit|cost|investment)\b/i,
-    Market: /\b(customers?|buyers?|market|sales|selling|brand|distribution|supply chain|enterprise|startup|business|export)\b/i,
-  };
   for (const option of SIX_M_OPTIONS) {
-    if (signalMap[option]?.test(haystack)) matches.push(option);
+    if (SIX_M_SIGNAL_MAP[option]?.test(haystack)) matches.push(option);
   }
   return matches;
 }
@@ -415,6 +415,14 @@ async function summarizeWithGemini(listingItem, parsedStory) {
     'Rules:',
     '- Use null when the article does not provide a reliable value.',
     '- six_m_categories must only use: Manpower, Method, Material, Machine, Money, Market.',
+    '- Apply 6M strictly using these meanings:',
+    '- Manpower = trainings or capacity-building support.',
+    '- Method = consulting, mentoring, technology transfer, processes, videos, SOPs, manuals, or blogs.',
+    '- Market = product/material purchase, market support, or market reports.',
+    '- Material = raw material supply.',
+    '- Machine = machinery or plant setup.',
+    '- Money = financial support.',
+    '- Do not assign a 6M category unless the story clearly supports that exact meaning.',
     '- tags should be short descriptive keywords.',
     '- person_name should be the main changemaker, founder, farmer, entrepreneur, or organisation representative the story centres on.',
     '- If multiple people or experts are quoted, contributors must capture each person and their specific advice, action, or role.',
