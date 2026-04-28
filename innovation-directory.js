@@ -133,6 +133,9 @@ function buildStoryIndex(story) {
       story.person_name,
       story.thematic_area,
       story.place_label,
+      story.location_text,
+      story.state,
+      story.country,
       story.summary_of_work,
       story.story_excerpt,
       story.contact_email,
@@ -147,12 +150,28 @@ function buildStoryIndex(story) {
 
 function scoreAgainstTokens(haystack, tokens, weight) {
   if (!tokens.length) return 0;
+  const haystackTokens = tokenize(haystack);
+  if (!haystackTokens.length) return null;
   let score = 0;
   for (const token of tokens) {
-    if (!haystack.includes(token)) return null;
-    score += haystack === token ? weight * 3 : haystack.startsWith(token) ? weight * 2 : weight;
+    if (haystackTokens.includes(token)) {
+      score += weight * 3;
+      continue;
+    }
+    if (haystackTokens.some((candidate) => candidate.startsWith(token))) {
+      score += weight * 2;
+      continue;
+    }
+    return null;
   }
   return score;
+}
+
+function getScoredStories(filters) {
+  return directoryState.stories
+    .map((story) => ({ story, score: scoreStory(story, filters) }))
+    .filter((entry) => entry.score !== null)
+    .sort((left, right) => Number(right.score) - Number(left.score) || String(right.story.source_published_at || '').localeCompare(String(left.story.source_published_at || '')));
 }
 
 function getFilters() {
@@ -377,10 +396,7 @@ function showMapStoryPanel(story) {
 function runSearch() {
   const filters = getFilters();
   directoryState.hasSearched = hasAnyFilter(filters);
-  const scored = directoryState.stories
-    .map((story) => ({ story, score: scoreStory(story, filters) }))
-    .filter((entry) => entry.score !== null)
-    .sort((left, right) => Number(right.score) - Number(left.score) || String(right.story.source_published_at || '').localeCompare(String(left.story.source_published_at || '')));
+  const scored = directoryState.hasSearched ? getScoredStories(filters) : [];
   directoryState.filteredStories = scored.map((entry) => entry.story);
   directoryState.currentPage = 1;
   setCounts();
@@ -390,6 +406,37 @@ function runSearch() {
   hideMapStoryPanel();
   renderMapResults();
   persistSearchState();
+}
+
+function restoreSavedSearch(snapshot) {
+  if (!snapshot?.hasSearched) return false;
+  applySearchSnapshot(snapshot);
+  const filters = getFilters();
+  if (!hasAnyFilter(filters)) return false;
+  directoryState.hasSearched = true;
+  directoryState.filteredStories = getScoredStories(filters).map((entry) => entry.story);
+  directoryState.currentPage = Math.min(Math.max(1, Number(snapshot.currentPage || 1)), getPageCount());
+  directoryState.selectedStoryId = snapshot.selectedStoryId || null;
+  setCounts();
+  renderResults();
+  renderPagination();
+  updateResultsSummary();
+  renderMapResults();
+  persistSearchState();
+  return true;
+}
+
+function shouldRestoreSnapshot(params) {
+  if (params.get('restore') === '1') return true;
+  const referrer = String(document.referrer || '');
+  if (referrer && referrer.startsWith(window.location.origin)) {
+    try {
+      const referrerUrl = new URL(referrer);
+      if (['/product-detail.html', '/vendor-detail.html'].includes(referrerUrl.pathname)) return true;
+    } catch {}
+  }
+  const navigationEntry = window.performance?.getEntriesByType?.('navigation')?.[0];
+  return navigationEntry?.type === 'back_forward';
 }
 
 function clearSearch() {
@@ -592,13 +639,12 @@ async function initDirectory() {
     directoryState.currentPage = 1;
     directoryState.selectedStoryId = null;
     populateFilterOptions();
+    const params = new URLSearchParams(window.location.search);
     const snapshot = restoreSearchState();
-    if (snapshot) {
-      applySearchSnapshot(snapshot);
-      directoryState.hasSearched = false;
-      directoryState.filteredStories = [];
-      directoryState.currentPage = 1;
-      directoryState.selectedStoryId = null;
+    if (shouldRestoreSnapshot(params) && snapshot?.hasSearched) {
+      restoreSavedSearch(snapshot);
+      statusEl.textContent = `${stories.length} Better India stor${stories.length === 1 ? 'y' : 'ies'} loaded from Supabase.`;
+      return;
     }
     setCounts();
     renderResults();
