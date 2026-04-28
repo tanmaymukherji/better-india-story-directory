@@ -23,6 +23,7 @@ const searchEls = {
 };
 const resultsEl = document.getElementById('vendor-results');
 const mapListEl = document.getElementById('map-results-list');
+const mapStoryPanelEl = document.getElementById('map-story-panel');
 const statusEl = document.getElementById('directory-status');
 const resultsSummaryEl = document.getElementById('results-summary');
 const paginationEls = [
@@ -281,6 +282,10 @@ function renderStoryCard(story) {
 }
 
 function renderResults() {
+  if (!directoryState.hasSearched) {
+    resultsEl.innerHTML = '<article class="vendor-empty-state">Use the filters on the left and run a search to load Better India story results.</article>';
+    return;
+  }
   const pageResults = getPageResults();
   resultsEl.innerHTML = pageResults.length
     ? pageResults.map(renderStoryCard).join('')
@@ -300,6 +305,7 @@ function renderPagination() {
   paginationEls.forEach((container) => {
     if (!container) return;
     container.innerHTML = '';
+    if (!directoryState.hasSearched || !directoryState.filteredStories.length) return;
     if (pageCount <= 1) return;
     const prev = document.createElement('button');
     prev.className = 'btn btn-small';
@@ -324,7 +330,7 @@ function updateResultsSummary() {
   if (!directoryState.filteredStories.length) {
     resultsSummaryEl.textContent = directoryState.hasSearched
       ? 'No stories matched the current filters.'
-      : 'Showing the latest stories from Supabase.';
+      : 'Run a parametric search to view matching stories.';
     return;
   }
   const pageResults = getPageResults();
@@ -342,6 +348,32 @@ function goToPage(pageNumber) {
   persistSearchState();
 }
 
+function hideMapStoryPanel() {
+  if (!mapStoryPanelEl) return;
+  mapStoryPanelEl.hidden = true;
+  mapStoryPanelEl.innerHTML = '';
+}
+
+function showMapStoryPanel(story) {
+  if (!mapStoryPanelEl || !story) return;
+  mapStoryPanelEl.innerHTML = `
+    <div class="vendor-map-story-panel-header">
+      <div>
+        <h4>${esc(story.title || 'Untitled story')}</h4>
+        <p>${esc(story.person_name || 'Unknown person')} | ${esc(story.place_label || 'Place not listed')}</p>
+      </div>
+      <button type="button" class="vendor-map-story-panel-close" id="close-map-story-panel">Close</button>
+    </div>
+    <p>${esc(story.summary_of_work || story.story_excerpt || 'No summary available.')}</p>
+    <div class="btn-group">
+      <a class="btn btn-small" href="./product-detail.html?story=${encodeURIComponent(story.story_uid)}">View Details</a>
+      <a class="btn btn-warning btn-small" href="${esc(story.story_url || '#')}" target="_blank" rel="noreferrer">View on Better India</a>
+    </div>
+  `;
+  mapStoryPanelEl.hidden = false;
+  mapStoryPanelEl.querySelector('#close-map-story-panel')?.addEventListener('click', hideMapStoryPanel);
+}
+
 function runSearch() {
   const filters = getFilters();
   directoryState.hasSearched = hasAnyFilter(filters);
@@ -355,6 +387,7 @@ function runSearch() {
   renderResults();
   renderPagination();
   updateResultsSummary();
+  hideMapStoryPanel();
   renderMapResults();
   persistSearchState();
 }
@@ -364,13 +397,15 @@ function clearSearch() {
   searchEls.thematic.value = '';
   searchEls.place.value = '';
   searchEls.keyword.value = '';
-  directoryState.filteredStories = [...directoryState.stories];
+  directoryState.filteredStories = [];
   directoryState.currentPage = 1;
   directoryState.hasSearched = false;
+  directoryState.selectedStoryId = null;
   setCounts();
   renderResults();
   renderPagination();
   updateResultsSummary();
+  hideMapStoryPanel();
   renderMapResults();
   persistSearchState();
 }
@@ -480,11 +515,18 @@ function clearMapMarkers() {
   directoryState.markers = [];
 }
 
-function buildPopupHtml(story) {
-  return `<div class="vendor-map-popup"><strong>${esc(story.title)}</strong><br/>${esc(story.person_name || 'Unknown person')}<br/>${esc(story.place_label || 'Location not listed')}<br/><a href="./product-detail.html?story=${encodeURIComponent(story.story_uid)}">View Details</a> | <a href="${esc(story.story_url || '#')}" target="_blank" rel="noreferrer">View on Better India</a></div>`;
-}
-
 async function renderMapResults() {
+  if (!directoryState.hasSearched) {
+    mapListEl.innerHTML = '<div class="vendor-map-status">Run a search to display matching stories on the map.</div>';
+    hideMapStoryPanel();
+    const mapReady = await ensureMap();
+    if (mapReady && directoryState.map) {
+      clearMapMarkers();
+      directoryState.map.setCenter?.(INDIA_CENTER);
+      directoryState.map.setZoom?.(4.8);
+    }
+    return;
+  }
   const pageResults = getPageResults();
   mapListEl.innerHTML = pageResults.length
     ? pageResults.map((story) => `<article class="vendor-map-list-item" data-focus-story="${esc(story.story_uid)}"><strong>${esc(story.title)}</strong><span>${esc(story.person_name || 'Unknown person')} | ${esc(story.place_label || 'Place not listed')}</span><div class="btn-group"><a class="btn btn-small" href="./product-detail.html?story=${encodeURIComponent(story.story_uid)}">View Details</a><a class="btn btn-warning btn-small" href="${esc(story.story_url || '#')}" target="_blank" rel="noreferrer">View on Better India</a></div></article>`).join('')
@@ -513,11 +555,18 @@ async function renderMapResults() {
       html: DEFAULT_MARKER_HTML,
       width: 20,
       height: 20,
-      popupHtml: buildPopupHtml(story),
       fitbounds: false,
     });
-    marker?.on?.('click', () => focusStory(story.story_uid, { scroll: true }));
-    marker?.addListener?.('click', () => focusStory(story.story_uid, { scroll: true }));
+    marker?.on?.('click', () => {
+      setSelectedStory(story.story_uid);
+      showMapStoryPanel(story);
+      persistSearchState();
+    });
+    marker?.addListener?.('click', () => {
+      setSelectedStory(story.story_uid);
+      showMapStoryPanel(story);
+      persistSearchState();
+    });
     directoryState.markers.push(marker);
     markerCount += 1;
   }
@@ -538,7 +587,7 @@ async function initDirectory() {
     const { stories, people } = await window.BetterIndiaStore.loadStories();
     directoryState.stories = stories;
     directoryState.people = people;
-    directoryState.filteredStories = [...stories];
+    directoryState.filteredStories = [];
     populateFilterOptions();
     const snapshot = restoreSearchState();
     if (snapshot) {
