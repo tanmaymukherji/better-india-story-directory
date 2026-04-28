@@ -482,12 +482,30 @@ function toNullableNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-async function geocodeStoryFallback(row) {
-  const queries = dedupe([
+function buildGeocodeQueries(row) {
+  const rawCandidates = [
     [row.contact_address, row.place_label, row.state, row.country || 'India'].filter(Boolean).join(', '),
     [row.place_label, row.state, row.country || 'India'].filter(Boolean).join(', '),
     [row.state, row.country || 'India'].filter(Boolean).join(', '),
-  ]);
+  ];
+  const normalized = dedupe(rawCandidates);
+  const expanded = [];
+  for (const query of normalized) {
+    expanded.push(query);
+    const parts = query.split(',').map((part) => cleanText(part)).filter(Boolean);
+    if (parts.length >= 2) {
+      for (let index = 1; index < parts.length; index += 1) {
+        expanded.push(parts.slice(index).join(', '));
+      }
+    }
+    const softened = cleanText(query.replace(/\b(valley|district|block|taluk|tehsil|village|forest|reserve|lake|river)\b/gi, ''));
+    if (softened && softened !== query) expanded.push(softened);
+  }
+  return dedupe(expanded);
+}
+
+async function geocodeStoryFallback(row) {
+  const queries = buildGeocodeQueries(row);
   for (const query of queries) {
     try {
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`, {

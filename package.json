@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sync:better-india": "node scripts/sync-better-india.mjs"
+    "sync:better-india": "node scripts/sync-better-india.mjs",
+    "backfill:better-india-geocodes": "node scripts/backfill-better-india-geocodes.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
     "cheerio": "^1.1.2"
   }
 }
-
