@@ -13,6 +13,7 @@ const BETTER_INDIA_BASE_URL = 'https://thebetterindia.com';
 const BETTER_INDIA_LISTING_URL = `${BETTER_INDIA_BASE_URL}/stories`;
 const MAX_STORIES_PER_RUN = 10;
 const LATEST_STORY_CHECKS_PER_RUN = 3;
+const MAX_COMPILATION_LINKS_PER_STORY = Math.max(2, Number(process.env.MAX_COMPILATION_LINKS_PER_STORY || 4));
 const GEMINI_REQUEST_DELAY_MS = Math.max(0, Number(process.env.GEMINI_REQUEST_DELAY_MS || 4000));
 const GEMINI_MAX_STORY_CHARS = Math.max(3000, Number(process.env.GEMINI_MAX_STORY_CHARS || 9000));
 const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 20));
@@ -70,13 +71,28 @@ function safeUrl(value) {
   }
 }
 
+function getPathSegments(url) {
+  try {
+    return new URL(url).pathname.split('/').map((value) => value.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function looksLikeStorySlug(value) {
+  const slug = requireString(value).toLowerCase();
+  return /\d{5,}$/.test(slug) || (slug.split('-').length >= 5 && slug.length >= 30);
+}
+
 function isStoryUrl(url) {
   try {
     const parsed = new URL(url);
     if (!/thebetterindia\.com$/i.test(parsed.hostname)) return false;
-    const path = parsed.pathname.replace(/\/+$/, '');
-    if (!path || path === '/stories' || path.startsWith('/stories/page')) return false;
-    return /\/\d+\/|\/[a-z0-9-]{10,}/i.test(path);
+    const segments = getPathSegments(url);
+    if (!segments.length) return false;
+    if (['stories', 'author', 'web-stories', 'tag', 'category'].includes(segments[0]?.toLowerCase?.())) return false;
+    if (segments.length === 1) return looksLikeStorySlug(segments[0]);
+    return looksLikeStorySlug(segments[segments.length - 1]);
   } catch {
     return false;
   }
@@ -133,6 +149,24 @@ function normalizePhone(value) {
 
 function extractPhones(text) {
   return dedupe((text.match(/(?:\+?91[\s-]*)?[6-9]\d{2}[\s-]*\d{3}[\s-]*\d{4}/g) || []).map(normalizePhone));
+}
+
+function inferSixMHeuristically(text) {
+  const haystack = normalizeText(text);
+  if (!haystack) return [];
+  const matches = [];
+  const signalMap = {
+    Manpower: /\b(volunteer|community|workers?|women|self-help group|students?|youth|farmers?|artisans?|team|collective|members?)\b/i,
+    Method: /\b(training|model|process|practice|approach|campaign|awareness|education|technique|system|intervention|recycling|conservation)\b/i,
+    Material: /\b(waste|plastic|bamboo|coir|fabric|compost|seed|soil|biodegradable|material|raw material|produce)\b/i,
+    Machine: /\b(machine|device|tool|equipment|app|technology|platform|drone|solar|mechanical|digital|ai)\b/i,
+    Money: /\b(income|livelihood|funding|loan|saving|finance|revenue|earnings|salary|profit|cost|investment)\b/i,
+    Market: /\b(customers?|buyers?|market|sales|selling|brand|distribution|supply chain|enterprise|startup|business|export)\b/i,
+  };
+  for (const option of SIX_M_OPTIONS) {
+    if (signalMap[option]?.test(haystack)) matches.push(option);
+  }
+  return matches;
 }
 
 async function fetchText(url) {
@@ -236,6 +270,24 @@ function parseStoryPage(html, listingItem) {
     .map((_, el) => cleanText($(el).text()))
     .get()
     .filter((text) => text && text.length > 30 && !/advertis/i.test(text) && !/follow us/i.test(text));
+  const inlineStoryLinks = dedupe($('article a[href], main a[href]')
+    .map((_, el) => {
+      const anchor = $(el);
+      const detailUrl = safeUrl(anchor.attr('href') || '');
+      const title = cleanText(anchor.text()) || null;
+      if (!isStoryUrl(detailUrl) || detailUrl === listingItem.detailUrl) return null;
+      return JSON.stringify({ detailUrl, title });
+    })
+    .get()
+    .filter(Boolean))
+    .map((value) => {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
   return {
     title,
     excerpt,
@@ -245,6 +297,7 @@ function parseStoryPage(html, listingItem) {
     coverImageUrl,
     imageUrls: imageUrls.length ? imageUrls : (coverImageUrl ? [coverImageUrl] : []),
     storyText: dedupe(paragraphs).join('\n\n'),
+    inlineStoryLinks,
   };
 }
 
@@ -274,6 +327,30 @@ function normalizeSixM(values) {
 function normalizeTags(values) {
   const list = Array.isArray(values) ? values.map((item) => cleanText(String(item || ''))) : [];
   return dedupe(list).slice(0, 16);
+}
+
+function shouldExpandCompilationStory(listingItem, parsedStory) {
+  const signals = normalizeText([listingItem.title, listingItem.excerpt, parsedStory.excerpt].join(' '));
+  const hasTitleSignal = /\b(top|best|must[- ]read|list|roundup|round-up|stories|story collection|here are|these|from\b.+\bto\b)\b/i.test(signals);
+  return parsedStory.inlineStoryLinks.length >= 4 || (parsedStory.inlineStoryLinks.length >= 2 && hasTitleSignal);
+}
+
+function buildCompilationChildren(listingItem, parsedStory) {
+  return (parsedStory.inlineStoryLinks || [])
+    .slice(0, MAX_COMPILATION_LINKS_PER_STORY)
+    .map((child, index) => ({
+      detailUrl: child.detailUrl,
+      title: child.title || `Referenced story ${index + 1}`,
+      excerpt: parsedStory.excerpt || listingItem.excerpt,
+      thematicArea: listingItem.thematicArea || parsedStory.thematicArea,
+      publishedAt: parsedStory.publishedAt || listingItem.publishedAt,
+      authorName: parsedStory.authorName || listingItem.authorName || null,
+      imageUrl: parsedStory.coverImageUrl || listingItem.imageUrl || null,
+      pageNumber: listingItem.pageNumber,
+      pagePosition: listingItem.pagePosition,
+      parentStoryUrl: listingItem.detailUrl,
+      parentStoryTitle: parsedStory.title || listingItem.title,
+    }));
 }
 
 async function summarizeWithGemini(listingItem, parsedStory) {
@@ -486,6 +563,21 @@ async function loadExistingStoryIds() {
   return new Set(rows.map((row) => row.story_uid));
 }
 
+async function purgeInvalidStoredStories() {
+  const rows = await fetchAllRows('better_india_stories', 'story_uid, story_url');
+  const invalidIds = rows
+    .filter((row) => !isStoryUrl(row.story_url))
+    .map((row) => row.story_uid)
+    .filter(Boolean);
+  for (let index = 0; index < invalidIds.length; index += 50) {
+    const batch = invalidIds.slice(index, index + 50);
+    if (!batch.length) continue;
+    const { error } = await supabase.from('better_india_stories').delete().in('story_uid', batch);
+    if (error) throw new Error(`Could not remove invalid Better India records: ${error.message}`);
+  }
+  return invalidIds.length;
+}
+
 async function chooseStoriesForRun(syncState, existingStoryIds) {
   const firstPage = await scrapeListingPage(1);
   const pageCount = Math.max(1, firstPage.pageCount);
@@ -532,6 +624,10 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
   const title = parsedStory.title || listingItem.title;
   const personName = aiSummary.person_name || title.match(/^([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})/)?.[1] || 'Unknown Person';
   const place = aiSummary.place || parsedStory.storyText.match(/\b(?:in|from|at)\s+([A-Z][A-Za-z .'-]+(?:,\s*[A-Z][A-Za-z .'-]+){0,2})/)?.[1] || null;
+  const inferredSixM = normalizeSixM([
+    ...(aiSummary.six_m_categories || []),
+    ...inferSixMHeuristically([title, parsedStory.excerpt, parsedStory.storyText, aiSummary.summary_of_work, ...(aiSummary.tags || [])].join(' ')),
+  ]);
   const row = {
     story_uid: storyUidFromUrl(listingItem.detailUrl),
     story_url: listingItem.detailUrl,
@@ -549,7 +645,7 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
     contact_address: aiSummary.contact_address || place,
     summary_of_work: aiSummary.summary_of_work || parsedStory.excerpt || listingItem.excerpt || null,
     story_excerpt: parsedStory.excerpt || listingItem.excerpt || null,
-    six_m_categories: aiSummary.six_m_categories,
+    six_m_categories: inferredSixM,
     tags: dedupe([...(aiSummary.tags || []), ...(parsedStory.thematicArea ? [parsedStory.thematicArea] : [])]),
     cover_image_url: parsedStory.coverImageUrl || listingItem.imageUrl || null,
     story_image_urls: parsedStory.imageUrls,
@@ -558,7 +654,7 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
     source_published_at: parsedStory.publishedAt || listingItem.publishedAt || null,
     source_listing_page: listingItem.pageNumber,
     source_listing_position: listingItem.pagePosition,
-    source_status: 'synced',
+    source_status: listingItem.parentStoryUrl ? 'compilation_child' : 'synced',
     admin_notes: null,
     ai_model: aiModel,
     ai_summary: aiSummary,
@@ -566,6 +662,9 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
       listing: listingItem,
       parsed_excerpt: parsedStory.excerpt,
       parsed_author: parsedStory.authorName,
+      parent_story_url: listingItem.parentStoryUrl || null,
+      parent_story_title: listingItem.parentStoryTitle || null,
+      inline_story_links: parsedStory.inlineStoryLinks || [],
     },
     synced_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -576,6 +675,7 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
 
 async function runSync() {
   await markStaleRunningSyncs();
+  const purgedInvalidCount = await purgeInvalidStoredStories();
   const syncState = await getSyncState();
   const { data: runData, error: runError } = await supabase
     .from('better_india_sync_runs')
@@ -608,9 +708,34 @@ async function runSync() {
     }
 
     let processedCount = 0;
-    for (const listingItem of selection.selected) {
+    const queue = [...selection.selected];
+    const queuedUrls = new Set(queue.map((item) => item.detailUrl));
+    const seenStoryIds = new Set();
+
+    while (queue.length && processedCount < MAX_STORIES_PER_RUN) {
+      const listingItem = queue.shift();
+      if (!listingItem?.detailUrl) continue;
+      queuedUrls.delete(listingItem.detailUrl);
+      const storyUid = storyUidFromUrl(listingItem.detailUrl);
+      if (existingStoryIds.has(storyUid) || seenStoryIds.has(storyUid) || !isStoryUrl(listingItem.detailUrl)) continue;
+
       const html = await fetchText(listingItem.detailUrl);
       const parsedStory = parseStoryPage(html, listingItem);
+      if (shouldExpandCompilationStory(listingItem, parsedStory)) {
+        const children = buildCompilationChildren(listingItem, parsedStory)
+          .filter((child) => {
+            const childUid = storyUidFromUrl(child.detailUrl);
+            return !existingStoryIds.has(childUid) && !seenStoryIds.has(childUid) && !queuedUrls.has(child.detailUrl);
+          });
+        if (children.length) {
+          [...children].reverse().forEach((child) => {
+            queue.unshift(child);
+            queuedUrls.add(child.detailUrl);
+          });
+          continue;
+        }
+      }
+
       const { aiModel, summary: aiSummary } = await summarizeWithGemini(listingItem, parsedStory);
       const row = buildStoryRow(listingItem, parsedStory, aiSummary, aiModel);
       const geocoded = await geocodeStoryFallback(row);
@@ -620,11 +745,14 @@ async function runSync() {
       const { error: upsertError } = await supabase.from('better_india_stories').upsert([row], { onConflict: 'story_uid' });
       if (upsertError) throw new Error(`Better India story insert failed: ${upsertError.message}`);
       processedCount += 1;
+      seenStoryIds.add(row.story_uid);
+      existingStoryIds.add(row.story_uid);
       await supabase.from('better_india_sync_runs').update({
         story_count: processedCount,
+        error_message: purgedInvalidCount ? `Removed ${purgedInvalidCount} invalid non-story rows before syncing.` : null,
         updated_at: new Date().toISOString(),
       }).eq('id', runId);
-      if (processedCount < selection.selected.length && GEMINI_REQUEST_DELAY_MS > 0) {
+      if (queue.length && processedCount < MAX_STORIES_PER_RUN && GEMINI_REQUEST_DELAY_MS > 0) {
         await sleep(GEMINI_REQUEST_DELAY_MS);
       }
     }
@@ -633,7 +761,7 @@ async function runSync() {
       status: 'success',
       finished_at: new Date().toISOString(),
       story_count: processedCount,
-      error_message: null,
+      error_message: purgedInvalidCount ? `Removed ${purgedInvalidCount} invalid non-story rows before syncing.` : null,
       updated_at: new Date().toISOString(),
     }).eq('id', runId);
 

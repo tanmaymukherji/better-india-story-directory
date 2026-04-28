@@ -29,6 +29,7 @@ const paginationEls = [
   document.getElementById('results-pagination-top'),
   document.getElementById('results-pagination-bottom'),
 ];
+const DEFAULT_MARKER_HTML = '<div style="position:relative;width:20px;height:20px;border-radius:999px;background:#d97706;border:3px solid #fff;box-shadow:0 0 0 7px rgba(217,119,6,.18),0 8px 18px rgba(15,23,42,.24);"></div>';
 
 function esc(value) {
   return String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
@@ -501,6 +502,7 @@ async function renderMapResults() {
   if (!mapReady || !directoryState.map) return;
   clearMapMarkers();
   const bounds = [];
+  let markerCount = 0;
   for (const story of pageResults) {
     const point = await geocodeStory(story);
     if (!point) continue;
@@ -508,13 +510,19 @@ async function renderMapResults() {
     const marker = new window.mappls.Marker({
       map: directoryState.map,
       position: point,
+      html: DEFAULT_MARKER_HTML,
+      width: 20,
+      height: 20,
       popupHtml: buildPopupHtml(story),
-      icon: {
-        html: '<div style="width:16px;height:16px;border-radius:999px;background:#d97706;border:2px solid #fff;box-shadow:0 8px 24px rgba(15,23,42,.24);"></div>',
-      },
+      fitbounds: false,
     });
     marker?.on?.('click', () => focusStory(story.story_uid, { scroll: true }));
+    marker?.addListener?.('click', () => focusStory(story.story_uid, { scroll: true }));
     directoryState.markers.push(marker);
+    markerCount += 1;
+  }
+  if (!markerCount && pageResults.length) {
+    mapListEl.insertAdjacentHTML('afterbegin', '<div class="vendor-map-status">Stories are listed here, but no usable coordinates could be derived from the current page of results yet.</div>');
   }
   if (bounds.length && directoryState.map?.fitBounds) {
     directoryState.map.fitBounds(bounds, { padding: 60, maxZoom: 8 });
