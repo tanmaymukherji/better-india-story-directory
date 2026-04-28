@@ -4,7 +4,7 @@ import { load } from 'cheerio';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SELCO_VENDOR_SERVICE_ROLE_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-const GEMINI_MODELS = (process.env.GEMINI_MODELS || 'gemini-1.5-flash,gemini-2.0-flash')
+const GEMINI_MODELS = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-flash-lite-latest,gemini-flash-latest,gemini-2.0-flash-lite,gemini-2.0-flash')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
@@ -18,6 +18,7 @@ const GEMINI_MAX_STORY_CHARS = Math.max(3000, Number(process.env.GEMINI_MAX_STOR
 const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 20));
 const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
 const USER_AGENT = 'Better India Story Directory Sync/2.0';
+let availableGeminiModelsPromise = null;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.');
@@ -44,6 +45,11 @@ function dedupe(values) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeModelName(value) {
+  const name = requireString(value);
+  return name.startsWith('models/') ? name.slice('models/'.length) : name;
 }
 
 function slugify(value) {
@@ -291,9 +297,10 @@ async function summarizeWithGemini(listingItem, parsedStory) {
     `Story body:\n${parsedStory.storyText.slice(0, GEMINI_MAX_STORY_CHARS)}`,
   ].join('\n');
 
+  const candidateModels = await getUsableGeminiModels();
   let lastError = null;
-  for (let modelIndex = 0; modelIndex < GEMINI_MODELS.length; modelIndex += 1) {
-    const modelName = GEMINI_MODELS[modelIndex];
+  for (let modelIndex = 0; modelIndex < candidateModels.length; modelIndex += 1) {
+    const modelName = candidateModels[modelIndex];
     if (modelIndex > 0) await sleep(1500);
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
       method: 'POST',
@@ -336,6 +343,40 @@ async function summarizeWithGemini(listingItem, parsedStory) {
   }
 
   throw lastError || new Error('Gemini summary generation failed for all configured models.');
+}
+
+async function fetchAvailableGeminiModels() {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '');
+    throw new Error(raw || `Gemini models list failed (${response.status})`);
+  }
+  const data = await response.json();
+  return (Array.isArray(data?.models) ? data.models : [])
+    .filter((model) => Array.isArray(model?.supportedGenerationMethods) && model.supportedGenerationMethods.includes('generateContent'))
+    .map((model) => normalizeModelName(model?.name))
+    .filter(Boolean);
+}
+
+async function getUsableGeminiModels() {
+  if (!availableGeminiModelsPromise) {
+    availableGeminiModelsPromise = fetchAvailableGeminiModels().catch((error) => {
+      availableGeminiModelsPromise = null;
+      throw error;
+    });
+  }
+  const availableModels = await availableGeminiModelsPromise;
+  const availableSet = new Set(availableModels);
+  const preferredModels = GEMINI_MODELS.map(normalizeModelName).filter((name) => availableSet.has(name));
+  if (preferredModels.length) return preferredModels;
+
+  const sensibleFallbacks = availableModels.filter((name) => /^gemini-.*(?:flash|pro)/i.test(name));
+  if (sensibleFallbacks.length) return sensibleFallbacks;
+
+  if (availableModels.length) return availableModels;
+  throw new Error('No Gemini models with generateContent support were returned for this API key.');
 }
 
 function buildSearchText(row) {
