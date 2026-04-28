@@ -40,6 +40,10 @@ function cleanText(value) {
   return requireString(value).replace(/\s+/g, ' ').trim();
 }
 
+function normalizeText(value) {
+  return cleanText(value).toLowerCase();
+}
+
 function dedupe(values) {
   return [...new Set((values || []).map((value) => cleanText(value)).filter(Boolean))];
 }
