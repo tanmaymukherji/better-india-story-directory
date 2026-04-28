@@ -374,6 +374,17 @@ function buildDisplaySummary(summary, contributors = [], processSteps = []) {
   return sections.join('\n\n').trim() || null;
 }
 
+function buildInvolvedPeopleName(primaryName, contributors = []) {
+  const names = dedupe([
+    primaryName,
+    ...contributors.map((item) => item?.name),
+  ]);
+  if (!names.length) return 'Unknown Person';
+  if (names.length === 1) return names[0];
+  if (names.length <= 3) return names.join(', ');
+  return `${names.slice(0, 3).join(', ')} + ${names.length - 3} more`;
+}
+
 function shouldExpandCompilationStory(listingItem, parsedStory) {
   const signals = normalizeText([listingItem.title, listingItem.excerpt, parsedStory.excerpt].join(' '));
   const hasTitleSignal = /\b(top|best|must[- ]read|list|roundup|round-up|stories|story collection|here are|these|from\b.+\bto\b)\b/i.test(signals);
@@ -692,7 +703,8 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
   const heuristicsEmails = extractEmails(parsedStory.storyText);
   const heuristicsPhones = extractPhones(parsedStory.storyText);
   const title = parsedStory.title || listingItem.title;
-  const personName = aiSummary.person_name || title.match(/^([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})/)?.[1] || 'Unknown Person';
+  const basePersonName = aiSummary.person_name || title.match(/^([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})/)?.[1] || null;
+  const personName = buildInvolvedPeopleName(basePersonName, aiSummary.contributors || []);
   const place = aiSummary.place || parsedStory.storyText.match(/\b(?:in|from|at)\s+([A-Z][A-Za-z .'-]+(?:,\s*[A-Z][A-Za-z .'-]+){0,2})/)?.[1] || null;
   const richSummary = buildDisplaySummary(
     aiSummary.summary_of_work || parsedStory.excerpt || listingItem.excerpt || null,

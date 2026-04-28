@@ -95,6 +95,17 @@ function buildDisplaySummary(summary, contributors = [], processSteps = []) {
   return sections.join('\n\n').trim() || null;
 }
 
+function buildInvolvedPeopleName(primaryName, contributors = []) {
+  const names = dedupe([
+    primaryName,
+    ...contributors.map((item) => item?.name),
+  ]);
+  if (!names.length) return 'Unknown Person';
+  if (names.length === 1) return names[0];
+  if (names.length <= 3) return names.join(', ');
+  return `${names.slice(0, 3).join(', ')} + ${names.length - 3} more`;
+}
+
 function inferSixMHeuristically(text) {
   const haystack = normalizeText(text);
   if (!haystack) return [];
@@ -130,8 +141,8 @@ async function fetchJson(path, options = {}) {
 
 async function loadRows() {
   const query = ONLY_STORY_UID
-    ? `/rest/v1/better_india_stories?select=story_uid,title,story_url,story_excerpt,thematic_area,author_name,source_published_at,source_listing_page,source_listing_position,cover_image_url,place_label,contact_address,state,country,tags,six_m_categories,ai_summary,raw_story&story_uid=eq.${encodeURIComponent(ONLY_STORY_UID)}`
-    : `/rest/v1/better_india_stories?select=story_uid,title,story_url,story_excerpt,thematic_area,author_name,source_published_at,source_listing_page,source_listing_position,cover_image_url,place_label,contact_address,state,country,tags,six_m_categories,ai_summary,raw_story&order=source_published_at.desc.nullslast&limit=${REPROCESS_LIMIT}`;
+    ? `/rest/v1/better_india_stories?select=story_uid,title,story_url,person_name,story_excerpt,thematic_area,author_name,source_published_at,source_listing_page,source_listing_position,cover_image_url,place_label,contact_address,state,country,tags,six_m_categories,ai_summary,raw_story&story_uid=eq.${encodeURIComponent(ONLY_STORY_UID)}`
+    : `/rest/v1/better_india_stories?select=story_uid,title,story_url,person_name,story_excerpt,thematic_area,author_name,source_published_at,source_listing_page,source_listing_position,cover_image_url,place_label,contact_address,state,country,tags,six_m_categories,ai_summary,raw_story&order=source_published_at.desc.nullslast&limit=${REPROCESS_LIMIT}`;
   return await fetchJson(query);
 }
 
@@ -333,7 +344,7 @@ async function run() {
     ]);
     const aiSummary = { ...summary, six_m_categories: sixM };
     const merged = {
-      person_name: summary.person_name || row.person_name || null,
+      person_name: buildInvolvedPeopleName(summary.person_name || row.person_name || null, summary.contributors || []),
       thematic_area: summary.thematic_area || row.thematic_area || parsedStory.thematicArea || null,
       place_label: summary.place || row.place_label || null,
       contact_address: summary.contact_address || row.contact_address || row.place_label || null,

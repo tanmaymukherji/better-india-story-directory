@@ -588,25 +588,23 @@ async function initDirectory() {
     directoryState.stories = stories;
     directoryState.people = people;
     directoryState.filteredStories = [];
+    directoryState.hasSearched = false;
+    directoryState.currentPage = 1;
+    directoryState.selectedStoryId = null;
     populateFilterOptions();
     const snapshot = restoreSearchState();
     if (snapshot) {
       applySearchSnapshot(snapshot);
-      if (snapshot.hasSearched) runSearch();
-      else {
-        setCounts();
-        renderResults();
-        renderPagination();
-        updateResultsSummary();
-        renderMapResults();
-      }
-    } else {
-      setCounts();
-      renderResults();
-      renderPagination();
-      updateResultsSummary();
-      renderMapResults();
+      directoryState.hasSearched = false;
+      directoryState.filteredStories = [];
+      directoryState.currentPage = 1;
+      directoryState.selectedStoryId = null;
     }
+    setCounts();
+    renderResults();
+    renderPagination();
+    updateResultsSummary();
+    renderMapResults();
     statusEl.textContent = `${stories.length} Better India stor${stories.length === 1 ? 'y' : 'ies'} loaded from Supabase.`;
   } catch (error) {
     statusEl.textContent = error.message || 'Better India stories could not be loaded.';
