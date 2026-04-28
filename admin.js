@@ -16,8 +16,10 @@ const adminEditorEmpty = document.getElementById('adminEditorEmpty');
 const adminEditorFields = document.getElementById('adminEditorFields');
 const adminEditStatus = document.getElementById('adminEditStatus');
 const saveStoryButton = document.getElementById('saveStoryButton');
+const sixMPreview = document.getElementById('sixMPreview');
 
 const ADMIN_SESSION_KEY = 'better-india-admin-session';
+const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
 const adminState = {
   stories: [],
   filteredStories: [],
@@ -58,6 +60,21 @@ function formatDate(value) {
 
 function parseCommaList(value) {
   return [...new Set(String(value || '').split(',').map((item) => item.trim()).filter(Boolean))];
+}
+
+function normalizeSixMValues(value) {
+  const normalizedMap = new Map(SIX_M_OPTIONS.map((item) => [item.toLowerCase(), item]));
+  return parseCommaList(value)
+    .map((item) => normalizedMap.get(String(item || '').trim().toLowerCase()) || '')
+    .filter(Boolean);
+}
+
+function renderSixMPreview(value) {
+  if (!sixMPreview) return;
+  const items = normalizeSixMValues(value);
+  sixMPreview.innerHTML = items.length
+    ? items.map((item) => `<span class="innovation-chip">${escapeHtml(item)}</span>`).join('')
+    : '<span class="innovation-chip innovation-chip-muted">No valid 6M categories selected</span>';
 }
 
 function getStoredToken() {
@@ -154,6 +171,7 @@ function fillEditor(story) {
   editEls.latitude.value = story.latitude ?? '';
   editEls.longitude.value = story.longitude ?? '';
   editEls.adminNotes.value = story.admin_notes || '';
+  renderSixMPreview(editEls.sixMCategories.value);
   setEditorVisible(true);
 }
 
@@ -264,7 +282,7 @@ async function saveStoryEdits(event) {
         contact_email: editEls.contactEmail.value,
         contact_phone: editEls.contactPhone.value,
         contact_address: editEls.contactAddress.value,
-        six_m_categories: parseCommaList(editEls.sixMCategories.value),
+        six_m_categories: normalizeSixMValues(editEls.sixMCategories.value),
         tags: parseCommaList(editEls.tags.value),
         summary_of_work: editEls.storySummary.value,
         story_url: editEls.sourceUrl.value,
@@ -328,6 +346,9 @@ signOutButton.addEventListener('click', async () => {
 adminSearchInput.addEventListener('input', () => {
   filterAdminStories();
   renderAdminResults();
+});
+editEls.sixMCategories.addEventListener('input', () => {
+  renderSixMPreview(editEls.sixMCategories.value);
 });
 runStorySyncButton.addEventListener('click', runStorySync);
 adminEditForm.addEventListener('submit', saveStoryEdits);

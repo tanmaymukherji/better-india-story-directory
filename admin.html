@@ -68,7 +68,22 @@
               <div class="form-group"><label for="editContactEmail">Contact Email</label><input id="editContactEmail" type="email" /></div>
               <div class="form-group"><label for="editContactPhone">Contact Phone</label><input id="editContactPhone" type="text" /></div>
               <div class="form-group"><label for="editContactAddress">Contact Address</label><textarea id="editContactAddress" rows="3"></textarea></div>
-              <div class="form-group"><label for="editSixMCategories">6M Classification</label><input id="editSixMCategories" type="text" placeholder="Comma separated: Manpower, Method, Material..." /></div>
+              <div class="form-group">
+                <label for="editSixMCategories">6M Classification</label>
+                <input id="editSixMCategories" type="text" placeholder="Comma separated: Manpower, Method, Material..." />
+                <div class="admin-6m-helper">
+                  <p><strong>Use only these 6M meanings:</strong></p>
+                  <div id="sixMPreview" class="innovation-chip-row"></div>
+                  <ul class="admin-6m-list">
+                    <li><strong>Manpower:</strong> Trainings or capacity-building support</li>
+                    <li><strong>Method:</strong> Consulting, mentoring, technology transfer, processes, videos, SOPs, manuals, blogs</li>
+                    <li><strong>Market:</strong> Product/material purchase, market support, market reports</li>
+                    <li><strong>Material:</strong> Raw material supply</li>
+                    <li><strong>Machine:</strong> Machinery, plant setup</li>
+                    <li><strong>Money:</strong> Financial support</li>
+                  </ul>
+                </div>
+              </div>
               <div class="form-group"><label for="editTags">Tags</label><textarea id="editTags" rows="3" placeholder="Comma separated tags"></textarea></div>
               <div class="form-group"><label for="editStorySummary">Summary of Work Done</label><textarea id="editStorySummary" rows="7"></textarea></div>
               <div class="form-group"><label for="editSourceUrl">View on Better India URL</label><input id="editSourceUrl" type="url" /></div>
@@ -90,4 +105,3 @@
   <script src="./admin.js"></script>
 </body>
 </html>
-

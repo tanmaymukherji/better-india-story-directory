@@ -84,6 +84,10 @@ a{text-decoration:none}
 .admin-search-card{cursor:pointer}
 .admin-search-card.active{border-color:#1f4b6e;background:#eef6fb;box-shadow:0 10px 24px rgba(31,75,110,.12)}
 .admin-search-card small{display:block;color:#6a7785;line-height:1.5}
+.admin-6m-helper{margin-top:.55rem;padding:.8rem;border:1px solid #dfe4ea;border-radius:12px;background:#f8fbfc}
+.admin-6m-helper p{margin:0 0 .55rem;color:#334155}
+.admin-6m-list{margin:0;padding-left:1rem;color:#536171;display:grid;gap:.3rem;line-height:1.5}
+.admin-6m-list li{margin:0}
 .innovation-detail-hero{display:grid;grid-template-columns:minmax(280px,360px) 1fr;gap:1rem;align-items:start}
 .innovation-detail-summary{display:grid;gap:.8rem}
 .innovation-chip-row{display:flex;flex-wrap:wrap;gap:.45rem}
