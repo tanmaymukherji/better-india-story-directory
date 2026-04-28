@@ -1,0 +1,21 @@
+name: Sync Better India Directory
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 */6 * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Supabase sync
+        env:
+          SYNC_URL: ${{ secrets.BETTER_INDIA_SYNC_URL }}
+          SYNC_TOKEN: ${{ secrets.BETTER_INDIA_SYNC_TOKEN }}
+        run: |
+          test -n "$SYNC_URL"
+          test -n "$SYNC_TOKEN"
+          curl --fail-with-body -X POST "$SYNC_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"scheduledSync\",\"cronToken\":\"$SYNC_TOKEN\"}"

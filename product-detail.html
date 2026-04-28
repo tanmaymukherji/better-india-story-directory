@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
+  <title>Better India Story Detail</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./config.js"></script>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="vendor-shell">
+    <header class="vendor-hero">
+      <div>
+        <p class="vendor-kicker">The Better India Story Directory</p>
+        <h1 id="detail-title">Story Detail</h1>
+        <p class="vendor-subtitle" id="detail-subtitle">Loading story summary...</p>
+      </div>
+      <div class="vendor-hero-actions">
+        <a class="btn btn-small" href="./index.html?restore=1">Back to Search</a>
+        <a class="btn btn-small" id="back-to-person" href="./index.html?restore=1">View Person</a>
+      </div>
+    </header>
+    <main id="product-detail-root" class="vendor-results-shell"></main>
+  </div>
+  <script src="./innovation-store.js"></script>
+  <script src="./product-detail.js"></script>
+</body>
+</html>
+
