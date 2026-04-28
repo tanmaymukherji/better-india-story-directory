@@ -100,10 +100,7 @@ function buildInvolvedPeopleName(primaryName, contributors = []) {
   const names = contributorNames.length
     ? contributorNames
     : dedupe([primaryName]);
-  if (!names.length) return 'Unknown Person';
-  if (names.length === 1) return names[0];
-  if (names.length <= 3) return names.join(', ');
-  return `${names.slice(0, 3).join(', ')} + ${names.length - 3} more`;
+  return names.length ? names.join(', ') : 'Unknown Person';
 }
 
 function inferSixMHeuristically(text) {
