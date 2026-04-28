@@ -333,6 +333,47 @@ function normalizeTags(values) {
   return dedupe(list).slice(0, 16);
 }
 
+function normalizeContributors(values) {
+  const list = Array.isArray(values) ? values : [];
+  const seen = new Set();
+  const output = [];
+  for (const value of list) {
+    const name = cleanText(value?.name);
+    const contribution = cleanText(value?.contribution);
+    if (!name && !contribution) continue;
+    const key = `${name.toLowerCase()}|${contribution.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push({
+      name: name || null,
+      contribution: contribution || null,
+    });
+  }
+  return output.slice(0, 12);
+}
+
+function normalizeProcessSteps(values) {
+  const list = Array.isArray(values) ? values.map((item) => cleanText(String(item || ''))) : [];
+  return dedupe(list).slice(0, 12);
+}
+
+function buildDisplaySummary(summary, contributors = [], processSteps = []) {
+  const sections = [];
+  const cleanSummary = cleanText(summary);
+  if (cleanSummary) sections.push(cleanSummary);
+  if (contributors.length) {
+    sections.push(`People and actions: ${contributors.map((item) => {
+      const name = cleanText(item?.name) || 'Contributor';
+      const contribution = cleanText(item?.contribution) || 'No specific contribution noted.';
+      return `${name}: ${contribution}`;
+    }).join(' ')}`);
+  }
+  if (processSteps.length) {
+    sections.push(`Process steps: ${processSteps.map((step, index) => `${index + 1}. ${step}`).join(' ')}`);
+  }
+  return sections.join('\n\n').trim() || null;
+}
+
 function shouldExpandCompilationStory(listingItem, parsedStory) {
   const signals = normalizeText([listingItem.title, listingItem.excerpt, parsedStory.excerpt].join(' '));
   const hasTitleSignal = /\b(top|best|must[- ]read|list|roundup|round-up|stories|story collection|here are|these|from\b.+\bto\b)\b/i.test(signals);
@@ -362,14 +403,17 @@ async function summarizeWithGemini(listingItem, parsedStory) {
     'Extract a structured summary from this Better India story.',
     'Return strict JSON only.',
     'Schema:',
-    '{"person_name":string|null,"contact_address":string|null,"contact_email":string|null,"contact_phone":string|null,"place":string|null,"thematic_area":string|null,"summary_of_work":string|null,"six_m_categories":string[],"tags":string[]}',
+    '{"person_name":string|null,"contributors":[{"name":string|null,"contribution":string|null}],"contact_address":string|null,"contact_email":string|null,"contact_phone":string|null,"place":string|null,"thematic_area":string|null,"summary_of_work":string|null,"process_steps":string[],"six_m_categories":string[],"tags":string[]}',
     'Rules:',
     '- Use null when the article does not provide a reliable value.',
     '- six_m_categories must only use: Manpower, Method, Material, Machine, Money, Market.',
     '- tags should be short descriptive keywords.',
     '- person_name should be the main changemaker, founder, farmer, entrepreneur, or organisation representative the story centres on.',
+    '- If multiple people or experts are quoted, contributors must capture each person and their specific advice, action, or role.',
     '- place should be the main operational place mentioned in the story.',
-    '- summary_of_work should be 2-4 sentences summarising the work done.',
+    '- summary_of_work must be useful and specific, not generic. Mention concrete actions, outcomes, and person-wise advice where relevant.',
+    '- If the article describes a how-to, routine, method, or action plan, process_steps must contain clear ordered steps.',
+    '- If the article contains multiple tips, recommendations, or expert viewpoints, summarize them distinctly instead of collapsing them into one generic paragraph.',
     `Title: ${listingItem.title}`,
     `Listing excerpt: ${listingItem.excerpt}`,
     `Thematic area from listing: ${listingItem.thematicArea || 'Unknown'}`,
@@ -411,12 +455,14 @@ async function summarizeWithGemini(listingItem, parsedStory) {
       aiModel: modelName,
       summary: {
         person_name: cleanText(parsed.person_name) || null,
+        contributors: normalizeContributors(parsed.contributors),
         contact_address: cleanText(parsed.contact_address) || null,
         contact_email: cleanText(parsed.contact_email) || null,
         contact_phone: cleanText(parsed.contact_phone) || null,
         place: cleanText(parsed.place) || null,
         thematic_area: cleanText(parsed.thematic_area) || null,
         summary_of_work: cleanText(parsed.summary_of_work) || null,
+        process_steps: normalizeProcessSteps(parsed.process_steps),
         six_m_categories: normalizeSixM(parsed.six_m_categories),
         tags: normalizeTags(parsed.tags),
       },
@@ -472,6 +518,8 @@ function buildSearchText(row) {
     requireString(row.contact_email),
     requireString(row.contact_phone),
     requireString(row.contact_address),
+    (row.ai_summary?.contributors || []).map((item) => [item?.name, item?.contribution].filter(Boolean).join(' ')).join(' '),
+    (row.ai_summary?.process_steps || []).join(' '),
     (row.tags || []).join(' '),
     (row.six_m_categories || []).join(' '),
   ].filter(Boolean).join(' ');
@@ -646,9 +694,22 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
   const title = parsedStory.title || listingItem.title;
   const personName = aiSummary.person_name || title.match(/^([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})/)?.[1] || 'Unknown Person';
   const place = aiSummary.place || parsedStory.storyText.match(/\b(?:in|from|at)\s+([A-Z][A-Za-z .'-]+(?:,\s*[A-Z][A-Za-z .'-]+){0,2})/)?.[1] || null;
+  const richSummary = buildDisplaySummary(
+    aiSummary.summary_of_work || parsedStory.excerpt || listingItem.excerpt || null,
+    aiSummary.contributors || [],
+    aiSummary.process_steps || [],
+  );
   const inferredSixM = normalizeSixM([
     ...(aiSummary.six_m_categories || []),
-    ...inferSixMHeuristically([title, parsedStory.excerpt, parsedStory.storyText, aiSummary.summary_of_work, ...(aiSummary.tags || [])].join(' ')),
+    ...inferSixMHeuristically([
+      title,
+      parsedStory.excerpt,
+      parsedStory.storyText,
+      aiSummary.summary_of_work,
+      ...(aiSummary.process_steps || []),
+      ...(aiSummary.contributors || []).map((item) => `${item?.name || ''} ${item?.contribution || ''}`),
+      ...(aiSummary.tags || []),
+    ].join(' ')),
   ]);
   const row = {
     story_uid: storyUidFromUrl(listingItem.detailUrl),
@@ -665,7 +726,7 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
     contact_email: aiSummary.contact_email || heuristicsEmails[0] || null,
     contact_phone: aiSummary.contact_phone || heuristicsPhones[0] || null,
     contact_address: aiSummary.contact_address || place,
-    summary_of_work: aiSummary.summary_of_work || parsedStory.excerpt || listingItem.excerpt || null,
+    summary_of_work: richSummary,
     story_excerpt: parsedStory.excerpt || listingItem.excerpt || null,
     six_m_categories: inferredSixM,
     tags: dedupe([...(aiSummary.tags || []), ...(parsedStory.thematicArea ? [parsedStory.thematicArea] : [])]),

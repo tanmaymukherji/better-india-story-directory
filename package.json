@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "sync:better-india": "node scripts/sync-better-india.mjs",
-    "backfill:better-india-geocodes": "node scripts/backfill-better-india-geocodes.mjs"
+    "backfill:better-india-geocodes": "node scripts/backfill-better-india-geocodes.mjs",
+    "reprocess:better-india-records": "node scripts/reprocess-better-india-records.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
