@@ -4,11 +4,18 @@ import { load } from 'cheerio';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SELCO_VENDOR_SERVICE_ROLE_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const GEMINI_MODELS = (process.env.GEMINI_MODELS || 'gemini-1.5-flash,gemini-2.0-flash')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 const REQUESTED_BY = process.env.BETTER_INDIA_REQUESTED_BY || process.env.GITHUB_ACTOR || 'scheduled';
 const BETTER_INDIA_BASE_URL = 'https://thebetterindia.com';
 const BETTER_INDIA_LISTING_URL = `${BETTER_INDIA_BASE_URL}/stories`;
 const MAX_STORIES_PER_RUN = 10;
 const LATEST_STORY_CHECKS_PER_RUN = 3;
+const GEMINI_REQUEST_DELAY_MS = Math.max(0, Number(process.env.GEMINI_REQUEST_DELAY_MS || 4000));
+const GEMINI_MAX_STORY_CHARS = Math.max(3000, Number(process.env.GEMINI_MAX_STORY_CHARS || 9000));
+const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 20));
 const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
 const USER_AGENT = 'Better India Story Directory Sync/2.0';
 
@@ -33,6 +40,10 @@ function cleanText(value) {
 
 function dedupe(values) {
   return [...new Set((values || []).map((value) => cleanText(value)).filter(Boolean))];
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function slugify(value) {
@@ -277,38 +288,54 @@ async function summarizeWithGemini(listingItem, parsedStory) {
     `Thematic area from listing: ${listingItem.thematicArea || 'Unknown'}`,
     `Author: ${parsedStory.authorName || 'Unknown'}`,
     `Published at: ${parsedStory.publishedAt || 'Unknown'}`,
-    `Story body:\n${parsedStory.storyText.slice(0, 18000)}`,
+    `Story body:\n${parsedStory.storyText.slice(0, GEMINI_MAX_STORY_CHARS)}`,
   ].join('\n');
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: 'application/json',
+  let lastError = null;
+  for (let modelIndex = 0; modelIndex < GEMINI_MODELS.length; modelIndex += 1) {
+    const modelName = GEMINI_MODELS[modelIndex];
+    if (modelIndex > 0) await sleep(1500);
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
+    if (!response.ok) {
+      const raw = await response.text().catch(() => '');
+      const isQuotaError = response.status === 429 || /quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(raw);
+      const quotaMessage = `Gemini quota unavailable for ${modelName}. ${raw || `Request failed with status ${response.status}.`}`;
+      if (isQuotaError) {
+        lastError = new Error(quotaMessage);
+        continue;
+      }
+      throw new Error(raw || `Gemini request failed (${response.status})`);
+    }
+    const data = await response.json();
+    const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+    const parsed = parseJsonObject(text);
+    return {
+      aiModel: modelName,
+      summary: {
+        person_name: cleanText(parsed.person_name) || null,
+        contact_address: cleanText(parsed.contact_address) || null,
+        contact_email: cleanText(parsed.contact_email) || null,
+        contact_phone: cleanText(parsed.contact_phone) || null,
+        place: cleanText(parsed.place) || null,
+        thematic_area: cleanText(parsed.thematic_area) || null,
+        summary_of_work: cleanText(parsed.summary_of_work) || null,
+        six_m_categories: normalizeSixM(parsed.six_m_categories),
+        tags: normalizeTags(parsed.tags),
       },
-    }),
-  });
-  if (!response.ok) {
-    const raw = await response.text().catch(() => '');
-    throw new Error(raw || `Gemini request failed (${response.status})`);
+    };
   }
-  const data = await response.json();
-  const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '');
-  const parsed = parseJsonObject(text);
-  return {
-    person_name: cleanText(parsed.person_name) || null,
-    contact_address: cleanText(parsed.contact_address) || null,
-    contact_email: cleanText(parsed.contact_email) || null,
-    contact_phone: cleanText(parsed.contact_phone) || null,
-    place: cleanText(parsed.place) || null,
-    thematic_area: cleanText(parsed.thematic_area) || null,
-    summary_of_work: cleanText(parsed.summary_of_work) || null,
-    six_m_categories: normalizeSixM(parsed.six_m_categories),
-    tags: normalizeTags(parsed.tags),
-  };
+
+  throw lastError || new Error('Gemini summary generation failed for all configured models.');
 }
 
 function buildSearchText(row) {
@@ -399,7 +426,7 @@ async function updateSyncState(values) {
 }
 
 async function markStaleRunningSyncs() {
-  const staleBefore = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+  const staleBefore = new Date(Date.now() - STALE_RUN_MINUTES * 60 * 1000).toISOString();
   const { error } = await supabase
     .from('better_india_sync_runs')
     .update({
@@ -458,7 +485,7 @@ async function chooseStoriesForRun(syncState, existingStoryIds) {
   };
 }
 
-function buildStoryRow(listingItem, parsedStory, aiSummary) {
+function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
   const heuristicsEmails = extractEmails(parsedStory.storyText);
   const heuristicsPhones = extractPhones(parsedStory.storyText);
   const title = parsedStory.title || listingItem.title;
@@ -492,7 +519,7 @@ function buildStoryRow(listingItem, parsedStory, aiSummary) {
     source_listing_position: listingItem.pagePosition,
     source_status: 'synced',
     admin_notes: null,
-    ai_model: 'gemini-2.0-flash',
+    ai_model: aiModel,
     ai_summary: aiSummary,
     raw_story: {
       listing: listingItem,
@@ -539,26 +566,32 @@ async function runSync() {
       return;
     }
 
-    const rows = [];
+    let processedCount = 0;
     for (const listingItem of selection.selected) {
       const html = await fetchText(listingItem.detailUrl);
       const parsedStory = parseStoryPage(html, listingItem);
-      const aiSummary = await summarizeWithGemini(listingItem, parsedStory);
-      const row = buildStoryRow(listingItem, parsedStory, aiSummary);
+      const { aiModel, summary: aiSummary } = await summarizeWithGemini(listingItem, parsedStory);
+      const row = buildStoryRow(listingItem, parsedStory, aiSummary, aiModel);
       const geocoded = await geocodeStoryFallback(row);
       row.latitude = geocoded.latitude;
       row.longitude = geocoded.longitude;
       row.search_text = buildSearchText(row);
-      rows.push(row);
+      const { error: upsertError } = await supabase.from('better_india_stories').upsert([row], { onConflict: 'story_uid' });
+      if (upsertError) throw new Error(`Better India story insert failed: ${upsertError.message}`);
+      processedCount += 1;
+      await supabase.from('better_india_sync_runs').update({
+        story_count: processedCount,
+        updated_at: new Date().toISOString(),
+      }).eq('id', runId);
+      if (processedCount < selection.selected.length && GEMINI_REQUEST_DELAY_MS > 0) {
+        await sleep(GEMINI_REQUEST_DELAY_MS);
+      }
     }
-
-    const { error: upsertError } = await supabase.from('better_india_stories').upsert(rows, { onConflict: 'story_uid' });
-    if (upsertError) throw new Error(`Better India story insert failed: ${upsertError.message}`);
 
     await supabase.from('better_india_sync_runs').update({
       status: 'success',
       finished_at: new Date().toISOString(),
-      story_count: rows.length,
+      story_count: processedCount,
       error_message: null,
       updated_at: new Date().toISOString(),
     }).eq('id', runId);
@@ -583,4 +616,3 @@ async function runSync() {
 }
 
 await runSync();
-

@@ -11,9 +11,14 @@ on:
   schedule:
     - cron: "30 */6 * * *"
 
+concurrency:
+  group: better-india-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
