@@ -19,6 +19,10 @@ a{text-decoration:none}
 .form-group{margin-bottom:.8rem}
 .form-group label{display:block;margin-bottom:.45rem;font-weight:600;color:#495057}
 .form-group input,.form-group textarea,.form-group select{width:100%;padding:.65rem;border:2px solid #e9ecef;border-radius:10px;font-size:1rem}
+.checkbox-grid{display:grid;grid-template-columns:1fr 1fr;gap:.45rem}
+.checkbox-item{display:flex;align-items:center;gap:.55rem;padding:.55rem .65rem;border:1px solid #dfe4ea;border-radius:10px;background:#f8f9fa;cursor:pointer}
+.checkbox-item input{width:auto;margin:0}
+.checkbox-item span{font-size:.95rem;color:#334155}
 .btn{background:linear-gradient(135deg,#3498db,#2980b9);color:#fff;border:none;padding:.55rem 1.1rem;border-radius:10px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
 .btn:hover{transform:translateY(-1px);box-shadow:0 5px 15px rgba(52,152,219,.25)}
 .btn-success{background:linear-gradient(135deg,#27ae60,#229954)}

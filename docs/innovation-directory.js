@@ -53,14 +53,16 @@ function uniqueSortedValues(values) {
 
 function getSelectedValues(selectEl) {
   if (!selectEl) return [];
-  return Array.from(selectEl.selectedOptions || []).map((option) => String(option.value || '').trim()).filter(Boolean);
+  return Array.from(selectEl.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => String(input.value || '').trim())
+    .filter(Boolean);
 }
 
 function setSelectedValues(selectEl, values) {
   if (!selectEl) return;
   const wanted = new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean));
-  Array.from(selectEl.options || []).forEach((option) => {
-    option.selected = wanted.has(option.value);
+  Array.from(selectEl.querySelectorAll('input[type="checkbox"]')).forEach((input) => {
+    input.checked = wanted.has(input.value);
   });
 }
 
@@ -93,13 +95,12 @@ function populateFilterOptions() {
     'All thematic areas'
   );
   const previousSixM = getSelectedValues(searchEls.sixm);
-  searchEls.sixm.innerHTML = '';
-  SIX_M_OPTIONS.forEach((value) => {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value;
-    searchEls.sixm.appendChild(option);
-  });
+  searchEls.sixm.innerHTML = SIX_M_OPTIONS.map((value) => `
+    <label class="checkbox-item">
+      <input type="checkbox" value="${esc(value)}" />
+      <span>${esc(value)}</span>
+    </label>
+  `).join('');
   setSelectedValues(searchEls.sixm, previousSixM);
 }
 
