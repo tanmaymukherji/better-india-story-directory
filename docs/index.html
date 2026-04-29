@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
+  <title>Better India Story Directory</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./config.js"></script>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="vendor-shell">
+    <header class="vendor-hero">
+      <div>
+        <p class="vendor-kicker">The Better India Story Directory</p>
+        <h1>Story and Changemaker Search</h1>
+        <p class="vendor-subtitle">Search Better India stories by keyword, name, place, and thematic area, then explore mapped story summaries and contact leads.</p>
+      </div>
+    </header>
+
+    <main class="vendor-layout">
+      <aside class="vendor-sidebar">
+        <section class="section">
+          <h3>Search Filters</h3>
+          <div class="form-group"><label for="search-name">Name</label><select id="search-name"><option value="">All names</option></select></div>
+          <div class="form-group"><label for="search-thematic">Thematic Area</label><select id="search-thematic"><option value="">All thematic areas</option></select></div>
+          <div class="form-group"><label for="search-place">Place</label><input id="search-place" type="search" placeholder="City, district, state, village, country" /></div>
+          <div class="form-group"><label for="search-keyword">Keyword</label><input id="search-keyword" type="search" placeholder="Title, people, place, summary, tags, 6M, contact, story text" /></div>
+          <div class="btn-group">
+            <button class="btn" id="run-search" type="button">Search</button>
+            <button class="btn btn-danger btn-small" id="clear-search" type="button">Clear</button>
+          </div>
+        </section>
+
+        <section class="section">
+          <h3>Directory Summary</h3>
+          <div class="stats-grid">
+            <div class="stat-card"><div class="stat-number" id="story-total-count">0</div><div>Stories</div></div>
+            <div class="stat-card"><div class="stat-number" id="name-total-count">0</div><div>Names</div></div>
+            <div class="stat-card"><div class="stat-number" id="filtered-story-count">0</div><div>Matches</div></div>
+          </div>
+          <p class="section-note" id="directory-status">Loading Better India story directory...</p>
+        </section>
+      </aside>
+
+      <section class="vendor-results-shell">
+        <div class="section">
+          <div class="vendor-results-header">
+            <div>
+              <h3>Map Results</h3>
+              <p class="section-note">The map follows the current result page. Click a dot or row to focus a story and open its details or original Better India page.</p>
+            </div>
+          </div>
+          <div class="vendor-map-grid">
+            <div id="results-map" class="vendor-map-canvas">
+              <div id="map-story-panel" class="vendor-map-story-panel" hidden></div>
+            </div>
+            <div id="map-results-list" class="vendor-map-list"></div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="vendor-results-header">
+            <div>
+              <h3>Story Results</h3>
+              <p class="section-note" id="results-summary">No results loaded yet.</p>
+            </div>
+          </div>
+          <div id="results-pagination-top" class="vendor-pagination"></div>
+          <div id="vendor-results" class="vendor-results-list"></div>
+          <div id="results-pagination-bottom" class="vendor-pagination"></div>
+        </div>
+      </section>
+    </main>
+
+    <div class="page-end-actions">
+      <a class="admin-sync-end" href="./admin.html" aria-label="Open admin sync">Admin Sync</a>
+    </div>
+  </div>
+
+  <script src="./innovation-store.js"></script>
+  <script src="./innovation-directory.js"></script>
+</body>
+</html>

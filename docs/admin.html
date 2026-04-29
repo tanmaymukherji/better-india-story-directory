@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Better India Story Directory Admin</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./config.js"></script>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="admin-shell">
+    <header class="vendor-hero">
+      <div>
+        <p class="vendor-kicker">The Better India Story Directory</p>
+        <h1>Admin Sync</h1>
+        <p class="vendor-subtitle">Run the Better India story crawler, then edit summaries, contacts, tags, place details, and 6M classification from one admin screen.</p>
+      </div>
+      <div class="vendor-hero-actions">
+        <a class="btn btn-small" href="./index.html">Open Search</a>
+      </div>
+    </header>
+
+    <main class="admin-grid">
+      <section class="section">
+        <h3>Admin Login</h3>
+        <form class="admin-form" id="loginForm">
+          <div class="form-group"><label for="adminPassword">Admin Password</label><input id="adminPassword" name="adminPassword" type="password" placeholder="Enter admin password" required /></div>
+          <div class="btn-group"><button class="btn btn-success" type="submit">Sign In</button></div>
+          <p class="admin-status" id="loginStatus"></p>
+        </form>
+
+        <div id="sessionPanel" class="session-panel">
+          <h3>Admin Controls</h3>
+          <p class="section-note">Each run processes up to 10 stories at a time. The sync checks for newly published stories while continuing through the old backlog.</p>
+          <div class="btn-group">
+            <button class="btn btn-success" type="button" id="runStorySync">Run Story Sync</button>
+            <button class="btn btn-danger btn-small" type="button" id="signOutButton">Sign Out</button>
+          </div>
+          <p class="admin-status" id="sessionStatus"></p>
+        </div>
+      </section>
+
+      <section class="section queue-panel" id="storySyncPanel">
+        <h3>Sync History</h3>
+        <p class="admin-helper" id="storySyncMeta">Sign in as admin to view and run sync operations.</p>
+        <div class="admin-card-list" id="storySyncRuns"></div>
+      </section>
+
+      <section class="section queue-panel" id="adminEditorPanel">
+        <h3>Story Editor</h3>
+        <p class="section-note">Search by story title, person name, place, thematic area, tag, or contact field, then update the saved record.</p>
+        <div class="form-group">
+          <label for="adminSearchInput">Search Stories</label>
+          <input id="adminSearchInput" type="search" placeholder="Search by title, person, place, thematic area, tags, contact, or keyword" />
+        </div>
+        <p class="admin-helper" id="adminSearchMeta">Sign in as admin to search and edit stories.</p>
+        <div class="admin-editor-layout">
+          <div class="admin-card-list" id="adminSearchResults"></div>
+          <form class="admin-form admin-editor-form" id="adminEditForm">
+            <input id="editStoryId" type="hidden" />
+            <div class="admin-editor-empty" id="adminEditorEmpty">Select a story from the search results to edit the saved summary and contact details.</div>
+            <div id="adminEditorFields" class="admin-editor-fields">
+              <div class="form-group"><label for="editStoryTitle">Story Title</label><input id="editStoryTitle" type="text" /></div>
+              <div class="form-group"><label for="editPersonName">Name of Person</label><input id="editPersonName" type="text" /></div>
+              <div class="form-group"><label for="editThematicArea">Thematic Area</label><input id="editThematicArea" type="text" /></div>
+              <div class="form-group"><label for="editPlaceLabel">Place</label><input id="editPlaceLabel" type="text" /></div>
+              <div class="form-group"><label for="editContactEmail">Contact Email</label><input id="editContactEmail" type="email" /></div>
+              <div class="form-group"><label for="editContactPhone">Contact Phone</label><input id="editContactPhone" type="text" /></div>
+              <div class="form-group"><label for="editContactAddress">Contact Address</label><textarea id="editContactAddress" rows="3"></textarea></div>
+              <div class="form-group">
+                <label for="editSixMCategories">6M Classification</label>
+                <input id="editSixMCategories" type="text" placeholder="Comma separated: Manpower, Method, Material..." />
+                <div class="admin-6m-helper">
+                  <p><strong>Use only these 6M meanings:</strong></p>
+                  <div id="sixMPreview" class="innovation-chip-row"></div>
+                  <ul class="admin-6m-list">
+                    <li><strong>Manpower:</strong> Trainings or capacity-building support</li>
+                    <li><strong>Method:</strong> Consulting, mentoring, technology transfer, processes, videos, SOPs, manuals, blogs</li>
+                    <li><strong>Market:</strong> Product/material purchase, market support, market reports</li>
+                    <li><strong>Material:</strong> Raw material supply</li>
+                    <li><strong>Machine:</strong> Machinery, plant setup</li>
+                    <li><strong>Money:</strong> Financial support</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="form-group"><label for="editTags">Tags</label><textarea id="editTags" rows="3" placeholder="Comma separated tags"></textarea></div>
+              <div class="form-group"><label for="editStorySummary">Summary of Work Done</label><textarea id="editStorySummary" rows="7"></textarea></div>
+              <div class="form-group"><label for="editSourceUrl">View on Better India URL</label><input id="editSourceUrl" type="url" /></div>
+              <div class="form-group"><label for="editLatitude">Latitude</label><input id="editLatitude" type="number" step="any" /></div>
+              <div class="form-group"><label for="editLongitude">Longitude</label><input id="editLongitude" type="number" step="any" /></div>
+              <div class="form-group"><label for="editAdminNotes">Admin Notes</label><textarea id="editAdminNotes" rows="4"></textarea></div>
+              <div class="btn-group">
+                <button class="btn btn-success" type="submit" id="saveStoryButton">Save Changes</button>
+              </div>
+              <p class="admin-status" id="adminEditStatus"></p>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./innovation-store.js"></script>
+  <script src="./admin.js"></script>
+</body>
+</html>
