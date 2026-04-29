@@ -62,6 +62,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isTransientGeminiError(status, raw) {
+  const text = String(raw || '');
+  return status === 503 || status === 500 || /UNAVAILABLE|high demand|temporar|backendError/i.test(text);
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = HTTP_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(`Timed out after ${timeoutMs}ms`), timeoutMs);
@@ -458,46 +463,55 @@ async function summarizeWithGemini(listingItem, parsedStory) {
   for (let modelIndex = 0; modelIndex < candidateModels.length; modelIndex += 1) {
     const modelName = candidateModels[modelIndex];
     if (modelIndex > 0) await sleep(1500);
-    const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-        },
-      }),
-    }, GEMINI_TIMEOUT_MS);
-    if (!response.ok) {
-      const raw = await response.text().catch(() => '');
-      const isQuotaError = response.status === 429 || /quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(raw);
-      const quotaMessage = `Gemini quota unavailable for ${modelName}. ${raw || `Request failed with status ${response.status}.`}`;
-      if (isQuotaError) {
-        lastError = new Error(quotaMessage);
-        continue;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) await sleep(1500 * attempt);
+      const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        }),
+      }, GEMINI_TIMEOUT_MS);
+      if (!response.ok) {
+        const raw = await response.text().catch(() => '');
+        const isQuotaError = response.status === 429 || /quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(raw);
+        const isTransientError = isTransientGeminiError(response.status, raw);
+        const quotaMessage = `Gemini quota unavailable for ${modelName}. ${raw || `Request failed with status ${response.status}.`}`;
+        if (isQuotaError) {
+          lastError = new Error(quotaMessage);
+          break;
+        }
+        if (isTransientError) {
+          lastError = new Error(`Gemini temporarily unavailable for ${modelName}. ${raw || `Request failed with status ${response.status}.`}`);
+          if (attempt < 2) continue;
+          break;
+        }
+        throw new Error(raw || `Gemini request failed (${response.status})`);
       }
-      throw new Error(raw || `Gemini request failed (${response.status})`);
+      const data = await response.json();
+      const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+      const parsed = parseJsonObject(text);
+      return {
+        aiModel: modelName,
+        summary: {
+          person_name: cleanText(parsed.person_name) || null,
+          contributors: normalizeContributors(parsed.contributors),
+          contact_address: cleanText(parsed.contact_address) || null,
+          contact_email: cleanText(parsed.contact_email) || null,
+          contact_phone: cleanText(parsed.contact_phone) || null,
+          place: cleanText(parsed.place) || null,
+          thematic_area: cleanText(parsed.thematic_area) || null,
+          summary_of_work: cleanText(parsed.summary_of_work) || null,
+          process_steps: normalizeProcessSteps(parsed.process_steps),
+          six_m_categories: normalizeSixM(parsed.six_m_categories),
+          tags: normalizeTags(parsed.tags),
+        },
+      };
     }
-    const data = await response.json();
-    const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '');
-    const parsed = parseJsonObject(text);
-    return {
-      aiModel: modelName,
-      summary: {
-        person_name: cleanText(parsed.person_name) || null,
-        contributors: normalizeContributors(parsed.contributors),
-        contact_address: cleanText(parsed.contact_address) || null,
-        contact_email: cleanText(parsed.contact_email) || null,
-        contact_phone: cleanText(parsed.contact_phone) || null,
-        place: cleanText(parsed.place) || null,
-        thematic_area: cleanText(parsed.thematic_area) || null,
-        summary_of_work: cleanText(parsed.summary_of_work) || null,
-        process_steps: normalizeProcessSteps(parsed.process_steps),
-        six_m_categories: normalizeSixM(parsed.six_m_categories),
-        tags: normalizeTags(parsed.tags),
-      },
-    };
   }
 
   throw lastError || new Error('Gemini summary generation failed for all configured models.');

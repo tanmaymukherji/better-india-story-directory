@@ -44,6 +44,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isTransientGeminiError(status, raw) {
+  const text = String(raw || '');
+  return status === 503 || status === 500 || /UNAVAILABLE|high demand|temporar|backendError/i.test(text);
+}
+
 function normalizeModelName(value) {
   const name = requireString(value);
   return name.startsWith('models/') ? name.slice('models/'.length) : name;
@@ -259,41 +264,49 @@ async function summarizeWithGemini(row, parsedStory) {
   for (let modelIndex = 0; modelIndex < candidateModels.length; modelIndex += 1) {
     const modelName = candidateModels[modelIndex];
     if (modelIndex > 0) await sleep(1500);
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) await sleep(1500 * attempt);
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+      if (!response.ok) {
+        const raw = await response.text().catch(() => '');
+        if (isTransientGeminiError(response.status, raw)) {
+          lastError = new Error(`Gemini temporarily unavailable for ${modelName}. ${raw || `Request failed with status ${response.status}.`}`);
+          if (attempt < 2) continue;
+          break;
+        }
+        lastError = new Error(raw || `Gemini request failed (${response.status})`);
+        break;
+      }
+      const data = await response.json();
+      const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+      const parsed = parseJsonObject(text);
+      return {
+        aiModel: modelName,
+        summary: {
+          person_name: cleanText(parsed.person_name) || null,
+          contributors: normalizeContributors(parsed.contributors),
+          contact_address: cleanText(parsed.contact_address) || null,
+          contact_email: cleanText(parsed.contact_email) || null,
+          contact_phone: cleanText(parsed.contact_phone) || null,
+          place: cleanText(parsed.place) || null,
+          thematic_area: cleanText(parsed.thematic_area) || null,
+          summary_of_work: cleanText(parsed.summary_of_work) || null,
+          process_steps: normalizeProcessSteps(parsed.process_steps),
+          six_m_categories: normalizeSixM(parsed.six_m_categories),
+          tags: normalizeTags(parsed.tags),
         },
-      }),
-    });
-    if (!response.ok) {
-      const raw = await response.text().catch(() => '');
-      lastError = new Error(raw || `Gemini request failed (${response.status})`);
-      continue;
+      };
     }
-    const data = await response.json();
-    const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '');
-    const parsed = parseJsonObject(text);
-    return {
-      aiModel: modelName,
-      summary: {
-        person_name: cleanText(parsed.person_name) || null,
-        contributors: normalizeContributors(parsed.contributors),
-        contact_address: cleanText(parsed.contact_address) || null,
-        contact_email: cleanText(parsed.contact_email) || null,
-        contact_phone: cleanText(parsed.contact_phone) || null,
-        place: cleanText(parsed.place) || null,
-        thematic_area: cleanText(parsed.thematic_area) || null,
-        summary_of_work: cleanText(parsed.summary_of_work) || null,
-        process_steps: normalizeProcessSteps(parsed.process_steps),
-        six_m_categories: normalizeSixM(parsed.six_m_categories),
-        tags: normalizeTags(parsed.tags),
-      },
-    };
   }
   throw lastError || new Error('Gemini summary generation failed.');
 }
