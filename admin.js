@@ -6,7 +6,10 @@ const storySyncPanel = document.getElementById('storySyncPanel');
 const storySyncMeta = document.getElementById('storySyncMeta');
 const storySyncRuns = document.getElementById('storySyncRuns');
 const runStorySyncButton = document.getElementById('runStorySync');
+const clearStorySyncRunsButton = document.getElementById('clearStorySyncRuns');
 const signOutButton = document.getElementById('signOutButton');
+const storySyncRunningIndicator = document.getElementById('storySyncRunningIndicator');
+const storySyncRunningText = document.getElementById('storySyncRunningText');
 const adminEditorPanel = document.getElementById('adminEditorPanel');
 const adminSearchInput = document.getElementById('adminSearchInput');
 const adminSearchMeta = document.getElementById('adminSearchMeta');
@@ -24,6 +27,9 @@ const adminState = {
   stories: [],
   filteredStories: [],
   selectedStoryId: '',
+  syncPollTimer: null,
+  syncPendingRefresh: false,
+  syncQueuedAt: 0,
 };
 
 const editEls = {
@@ -93,18 +99,44 @@ function updateSessionUi(isSignedIn) {
   adminEditorPanel.classList.toggle('active', Boolean(isSignedIn));
 }
 
+function clearSyncPollTimer() {
+  if (adminState.syncPollTimer) {
+    window.clearTimeout(adminState.syncPollTimer);
+    adminState.syncPollTimer = null;
+  }
+}
+
+function setRunningIndicator(isRunning, message = '') {
+  if (!storySyncRunningIndicator || !storySyncRunningText) return;
+  storySyncRunningIndicator.hidden = !isRunning;
+  storySyncRunningText.textContent = message || 'Better India sync is running. The screen will refresh automatically when it completes.';
+}
+
+function scheduleSyncStatusPoll(delay = 15000) {
+  clearSyncPollTimer();
+  if (!getStoredToken()) return;
+  adminState.syncPollTimer = window.setTimeout(() => {
+    refreshSyncMonitor().catch(() => {});
+  }, delay);
+}
+
 function renderStorySyncRuns(items) {
   storySyncRuns.innerHTML = '';
   if (!items.length) {
     storySyncRuns.innerHTML = '<article class="admin-card"><p>No Better India sync runs yet.</p></article>';
-    return;
+    return { hasRunning: false, latestFinished: null };
   }
+  let hasRunning = false;
+  let latestFinished = null;
   items.forEach((item) => {
+    if (item.status === 'running') hasRunning = true;
+    if (!latestFinished && item.finished_at) latestFinished = item.finished_at;
     const card = document.createElement('article');
     card.className = 'admin-card';
     card.innerHTML = `<div class="admin-card-header"><h4>${escapeHtml(item.status || 'unknown')}</h4><span class="admin-badge ${item.status === 'success' ? 'approved' : ''}">${escapeHtml(item.status || 'unknown')}</span></div><p><strong>Requested By:</strong> ${escapeHtml(item.requested_by || 'Unknown')}</p><p><strong>Started:</strong> ${escapeHtml(formatDate(item.started_at || item.created_at))}</p><p><strong>Finished:</strong> ${escapeHtml(formatDate(item.finished_at))}</p><p><strong>Stories:</strong> ${escapeHtml(String(item.story_count || 0))}</p><p><strong>Error:</strong> ${escapeHtml(item.error_message || 'None')}</p></article>`;
     storySyncRuns.appendChild(card);
   });
+  return { hasRunning, latestFinished };
 }
 
 function buildStorySearchText(story) {
@@ -220,6 +252,8 @@ async function verifySession() {
     return true;
   } catch {
     storeToken('');
+    clearSyncPollTimer();
+    setRunningIndicator(false);
     updateSessionUi(false);
     storySyncMeta.textContent = 'Your admin session has expired. Please sign in again.';
     adminSearchMeta.textContent = 'Your admin session has expired. Please sign in again.';
@@ -230,18 +264,46 @@ async function verifySession() {
 async function loadStorySyncRuns() {
   const token = getStoredToken();
   if (!token) {
+    clearSyncPollTimer();
+    setRunningIndicator(false);
     storySyncMeta.textContent = 'Sign in as admin to view and run sync operations.';
     storySyncRuns.innerHTML = '';
-    return;
+    return { hasRunning: false, latestFinished: null, items: [] };
   }
   storySyncMeta.textContent = 'Loading Better India sync history...';
   try {
     const data = await window.BetterIndiaStore.adminRequest('listBetterIndiaSyncRuns', { token });
     const items = Array.isArray(data?.items) ? data.items : [];
     storySyncMeta.textContent = `${items.length} Better India sync run${items.length === 1 ? '' : 's'} recorded`;
-    renderStorySyncRuns(items);
+    const state = renderStorySyncRuns(items);
+    return { ...state, items };
   } catch (error) {
+    setRunningIndicator(false);
     storySyncMeta.textContent = error.message || 'Better India sync history could not be loaded.';
+    return { hasRunning: false, latestFinished: null, items: [] };
+  }
+}
+
+async function refreshSyncMonitor() {
+  const state = await loadStorySyncRuns();
+  const queuedRecently = adminState.syncQueuedAt && (Date.now() - adminState.syncQueuedAt < 3 * 60 * 1000);
+  const shouldShowRunning = state.hasRunning || (adminState.syncPendingRefresh && queuedRecently);
+  if (shouldShowRunning) {
+    const message = state.hasRunning
+      ? 'Better India sync is running. This screen will refresh automatically when it completes.'
+      : 'Better India sync was just queued. Waiting for the new run to appear...';
+    setRunningIndicator(true, message);
+    scheduleSyncStatusPoll(15000);
+    return;
+  }
+  clearSyncPollTimer();
+  setRunningIndicator(false);
+  if (adminState.syncPendingRefresh) {
+    adminState.syncPendingRefresh = false;
+    adminState.syncQueuedAt = 0;
+    setStatus(sessionStatus, 'Better India sync completed. Refreshing saved stories...');
+    await Promise.all([loadAdminStories(), loadStorySyncRuns()]);
+    setStatus(sessionStatus, 'Better India sync completed. The screen refreshed automatically.');
   }
 }
 
@@ -250,12 +312,41 @@ async function runStorySync() {
   setStatus(sessionStatus, 'Queueing Better India story sync...');
   try {
     const data = await window.BetterIndiaStore.adminRequest('syncBetterIndiaStories', { token: getStoredToken() });
+    adminState.syncPendingRefresh = true;
+    adminState.syncQueuedAt = Date.now();
+    setRunningIndicator(true, 'Better India sync was queued. Waiting for the run to start...');
     setStatus(sessionStatus, data.message || 'Better India sync queued in GitHub Actions.');
-    await loadStorySyncRuns();
+    await refreshSyncMonitor();
   } catch (error) {
+    adminState.syncPendingRefresh = false;
+    adminState.syncQueuedAt = 0;
+    setRunningIndicator(false);
     setStatus(sessionStatus, error.message || 'Better India sync could not be queued.', true);
   } finally {
     runStorySyncButton.disabled = false;
+  }
+}
+
+async function clearStorySyncRuns() {
+  const token = getStoredToken();
+  if (!token) {
+    setStatus(sessionStatus, 'Sign in as admin first.', true);
+    return;
+  }
+  clearStorySyncRunsButton.disabled = true;
+  setStatus(sessionStatus, 'Clearing Better India sync logs...');
+  try {
+    const data = await window.BetterIndiaStore.adminRequest('deleteBetterIndiaSyncRuns', { token });
+    clearSyncPollTimer();
+    adminState.syncPendingRefresh = false;
+    adminState.syncQueuedAt = 0;
+    setRunningIndicator(false);
+    setStatus(sessionStatus, data.message || 'Better India sync logs cleared.');
+    await loadStorySyncRuns();
+  } catch (error) {
+    setStatus(sessionStatus, error.message || 'Better India sync logs could not be cleared.', true);
+  } finally {
+    clearStorySyncRunsButton.disabled = false;
   }
 }
 
@@ -317,7 +408,7 @@ loginForm.addEventListener('submit', async (event) => {
     document.getElementById('adminPassword').value = '';
     updateSessionUi(true);
     setStatus(loginStatus, 'Signed in successfully.');
-    await Promise.all([loadStorySyncRuns(), loadAdminStories()]);
+    await Promise.all([refreshSyncMonitor(), loadAdminStories()]);
   } catch (error) {
     setStatus(loginStatus, error.message || 'Admin login failed.', true);
   }
@@ -332,12 +423,16 @@ signOutButton.addEventListener('click', async () => {
   adminState.stories = [];
   adminState.filteredStories = [];
   adminState.selectedStoryId = '';
+  adminState.syncPendingRefresh = false;
+  adminState.syncQueuedAt = 0;
+  clearSyncPollTimer();
   updateSessionUi(false);
   storySyncMeta.textContent = 'Sign in as admin to view and run sync operations.';
   adminSearchMeta.textContent = 'Sign in as admin to search and edit stories.';
   storySyncRuns.innerHTML = '';
   adminSearchResults.innerHTML = '';
   setEditorVisible(false);
+  setRunningIndicator(false);
   setStatus(sessionStatus, '');
   setStatus(loginStatus, '');
   setStatus(adminEditStatus, '');
@@ -351,12 +446,13 @@ editEls.sixMCategories.addEventListener('input', () => {
   renderSixMPreview(editEls.sixMCategories.value);
 });
 runStorySyncButton.addEventListener('click', runStorySync);
+clearStorySyncRunsButton.addEventListener('click', clearStorySyncRuns);
 adminEditForm.addEventListener('submit', saveStoryEdits);
 
 (async function initAdmin() {
   updateSessionUi(false);
   const valid = await verifySession();
   if (valid) {
-    await Promise.all([loadStorySyncRuns(), loadAdminStories()]);
+    await Promise.all([refreshSyncMonitor(), loadAdminStories()]);
   }
 })();

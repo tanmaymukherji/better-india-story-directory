@@ -196,6 +196,15 @@ async function handleListBetterIndiaSyncRuns(token: string) {
   return jsonResponse({ items: data || [] });
 }
 
+async function handleDeleteBetterIndiaSyncRuns(token: string) {
+  const session = await validateSession(token);
+  if (!session) return errorResponse("Invalid admin session.", 401);
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.from("better_india_sync_runs").delete().not("id", "is", null);
+  if (error) return errorResponse("Better India sync logs could not be deleted.", 500);
+  return jsonResponse({ ok: true, message: "Better India sync logs cleared." });
+}
+
 async function geocodeStoryFallback(row: Record<string, unknown>) {
   const queries = dedupe([
     [row.contact_address, row.place_label, row.state, row.country || "India"].filter(Boolean).join(", "),
@@ -344,6 +353,8 @@ Deno.serve(async (request) => {
       return await handleLogout(token);
     case "listBetterIndiaSyncRuns":
       return await handleListBetterIndiaSyncRuns(token);
+    case "deleteBetterIndiaSyncRuns":
+      return await handleDeleteBetterIndiaSyncRuns(token);
     case "syncBetterIndiaStories":
       return await handleSyncBetterIndiaStories(token);
     case "updateBetterIndiaStory":
