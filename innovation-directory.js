@@ -15,9 +15,11 @@ const directoryState = {
 
 const INDIA_CENTER = { lat: 22.9734, lng: 78.6569 };
 const SEARCH_STATE_KEY = 'better_india_story_search_state_v1';
+const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
 const searchEls = {
   name: document.getElementById('search-name'),
   thematic: document.getElementById('search-thematic'),
+  sixm: document.getElementById('search-sixm'),
   place: document.getElementById('search-place'),
   keyword: document.getElementById('search-keyword'),
 };
@@ -49,6 +51,19 @@ function uniqueSortedValues(values) {
     .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
 }
 
+function getSelectedValues(selectEl) {
+  if (!selectEl) return [];
+  return Array.from(selectEl.selectedOptions || []).map((option) => String(option.value || '').trim()).filter(Boolean);
+}
+
+function setSelectedValues(selectEl, values) {
+  if (!selectEl) return;
+  const wanted = new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean));
+  Array.from(selectEl.options || []).forEach((option) => {
+    option.selected = wanted.has(option.value);
+  });
+}
+
 function populateSelectOptions(selectEl, values, placeholder) {
   if (!selectEl) return;
   const previousValue = selectEl.value;
@@ -77,6 +92,15 @@ function populateFilterOptions() {
     uniqueSortedValues(directoryState.stories.map((story) => story.thematic_area)),
     'All thematic areas'
   );
+  const previousSixM = getSelectedValues(searchEls.sixm);
+  searchEls.sixm.innerHTML = '';
+  SIX_M_OPTIONS.forEach((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    searchEls.sixm.appendChild(option);
+  });
+  setSelectedValues(searchEls.sixm, previousSixM);
 }
 
 function persistSearchState() {
@@ -84,6 +108,7 @@ function persistSearchState() {
     search: {
       name: searchEls.name.value,
       thematic: searchEls.thematic.value,
+      sixm: getSelectedValues(searchEls.sixm),
       place: searchEls.place.value,
       keyword: searchEls.keyword.value,
     },
@@ -111,6 +136,7 @@ function applySearchSnapshot(snapshot) {
   if (!snapshot?.search) return;
   searchEls.name.value = String(snapshot.search.name || '');
   searchEls.thematic.value = String(snapshot.search.thematic || '');
+  setSelectedValues(searchEls.sixm, Array.isArray(snapshot.search.sixm) ? snapshot.search.sixm : []);
   searchEls.place.value = String(snapshot.search.place || '');
   searchEls.keyword.value = String(snapshot.search.keyword || '');
   directoryState.currentPage = Number(snapshot.currentPage || 1);
@@ -121,6 +147,7 @@ function buildStoryIndex(story) {
   return {
     name: normalizeText(story.person_name),
     thematic: normalizeText(story.thematic_area),
+    sixm: (story.six_m_categories || []).map(normalizeText).filter(Boolean),
     place: [
       story.place_label,
       story.contact_address,
@@ -177,11 +204,13 @@ function getScoredStories(filters) {
 function getFilters() {
   const name = normalizeText(searchEls.name.value);
   const thematic = normalizeText(searchEls.thematic.value);
+  const sixm = getSelectedValues(searchEls.sixm).map(normalizeText).filter(Boolean);
   const place = normalizeText(searchEls.place.value);
   const keyword = normalizeText(searchEls.keyword.value);
   return {
     namePhrase: name,
     thematicPhrase: thematic,
+    sixmValues: sixm,
     placePhrase: place,
     keywordPhrase: keyword,
     nameTokens: tokenize(name),
@@ -195,6 +224,7 @@ function hasAnyFilter(filters) {
   return Boolean(
     filters.nameTokens.length ||
     filters.thematicTokens.length ||
+    filters.sixmValues.length ||
     filters.placeTokens.length ||
     filters.keywordTokens.length
   );
@@ -209,6 +239,11 @@ function scoreStory(story, filters) {
   const thematicScore = scoreAgainstTokens(index.thematic, filters.thematicTokens, 18);
   if (thematicScore === null) return null;
   score += thematicScore;
+  if (filters.sixmValues.length) {
+    const storySixM = new Set(index.sixm);
+    if (!filters.sixmValues.every((value) => storySixM.has(value))) return null;
+    score += filters.sixmValues.length * 20;
+  }
   const placeScore = scoreAgainstTokens(index.place, filters.placeTokens, 12);
   if (placeScore === null) return null;
   score += placeScore;
@@ -442,6 +477,7 @@ function shouldRestoreSnapshot(params) {
 function clearSearch() {
   searchEls.name.value = '';
   searchEls.thematic.value = '';
+  setSelectedValues(searchEls.sixm, []);
   searchEls.place.value = '';
   searchEls.keyword.value = '';
   directoryState.filteredStories = [];
