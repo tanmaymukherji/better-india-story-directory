@@ -18,7 +18,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,4 +37,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BETTER_INDIA_REQUESTED_BY: ${{ inputs.requested_by || 'scheduled' }}
+          GEMINI_REQUEST_DELAY_MS: 750
+          BETTER_INDIA_HTTP_TIMEOUT_MS: 30000
+          BETTER_INDIA_GEMINI_TIMEOUT_MS: 45000
         run: npm run sync:better-india

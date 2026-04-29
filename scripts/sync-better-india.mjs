@@ -14,9 +14,11 @@ const BETTER_INDIA_LISTING_URL = `${BETTER_INDIA_BASE_URL}/stories`;
 const MAX_STORIES_PER_RUN = 10;
 const LATEST_STORY_CHECKS_PER_RUN = 3;
 const MAX_COMPILATION_LINKS_PER_STORY = Math.max(2, Number(process.env.MAX_COMPILATION_LINKS_PER_STORY || 4));
-const GEMINI_REQUEST_DELAY_MS = Math.max(0, Number(process.env.GEMINI_REQUEST_DELAY_MS || 4000));
+const GEMINI_REQUEST_DELAY_MS = Math.max(0, Number(process.env.GEMINI_REQUEST_DELAY_MS || 750));
 const GEMINI_MAX_STORY_CHARS = Math.max(3000, Number(process.env.GEMINI_MAX_STORY_CHARS || 9000));
 const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 20));
+const HTTP_TIMEOUT_MS = Math.max(5000, Number(process.env.BETTER_INDIA_HTTP_TIMEOUT_MS || 30000));
+const GEMINI_TIMEOUT_MS = Math.max(8000, Number(process.env.BETTER_INDIA_GEMINI_TIMEOUT_MS || 45000));
 const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
 const SIX_M_SIGNAL_MAP = {
   Manpower: /\b(training|trainings|trainer|trainers|trainee|trainees|capacity building|skill building|workshop|workshops)\b/i,
@@ -58,6 +60,19 @@ function dedupe(values) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = HTTP_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(`Timed out after ${timeoutMs}ms`), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function normalizeModelName(value) {
@@ -174,12 +189,12 @@ function inferSixMHeuristically(text) {
 }
 
 async function fetchText(url) {
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
       Accept: 'text/html,application/xhtml+xml',
       'User-Agent': USER_AGENT,
     },
-  });
+  }, HTTP_TIMEOUT_MS);
   if (!response.ok) throw new Error(`Fetch failed for ${url}: ${response.status}`);
   return await response.text();
 }
@@ -443,7 +458,7 @@ async function summarizeWithGemini(listingItem, parsedStory) {
   for (let modelIndex = 0; modelIndex < candidateModels.length; modelIndex += 1) {
     const modelName = candidateModels[modelIndex];
     if (modelIndex > 0) await sleep(1500);
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+    const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -453,7 +468,7 @@ async function summarizeWithGemini(listingItem, parsedStory) {
           responseMimeType: 'application/json',
         },
       }),
-    });
+    }, GEMINI_TIMEOUT_MS);
     if (!response.ok) {
       const raw = await response.text().catch(() => '');
       const isQuotaError = response.status === 429 || /quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(raw);
@@ -489,9 +504,9 @@ async function summarizeWithGemini(listingItem, parsedStory) {
 }
 
 async function fetchAvailableGeminiModels() {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+  const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
     headers: { Accept: 'application/json' },
-  });
+  }, GEMINI_TIMEOUT_MS);
   if (!response.ok) {
     const raw = await response.text().catch(() => '');
     throw new Error(raw || `Gemini models list failed (${response.status})`);
@@ -576,9 +591,9 @@ async function geocodeStoryFallback(row) {
   const queries = buildGeocodeQueries(row);
   for (const query of queries) {
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`, {
+      const response = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`, {
         headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
-      });
+      }, HTTP_TIMEOUT_MS);
       if (!response.ok) continue;
       const data = await response.json();
       const match = Array.isArray(data) ? data[0] : null;
@@ -774,6 +789,7 @@ function buildStoryRow(listingItem, parsedStory, aiSummary, aiModel) {
 }
 
 async function runSync() {
+  const syncStartedAt = Date.now();
   await markStaleRunningSyncs();
   const purgedInvalidCount = await purgeInvalidStoredStories();
   const syncState = await getSyncState();
@@ -788,6 +804,7 @@ async function runSync() {
   try {
     const existingStoryIds = await loadExistingStoryIds();
     const selection = await chooseStoriesForRun(syncState, existingStoryIds);
+    console.log(`[sync] Selected ${selection.selected.length} candidate stories. Purged invalid rows: ${purgedInvalidCount}.`);
     await updateSyncState({
       last_started_at: new Date().toISOString(),
       last_total: selection.pageCount,
@@ -796,6 +813,7 @@ async function runSync() {
     });
 
     if (!selection.selected.length) {
+      console.log('[sync] No new Better India stories found for this run.');
       await supabase.from('better_india_sync_runs').update({
         status: 'success',
         finished_at: new Date().toISOString(),
@@ -818,6 +836,8 @@ async function runSync() {
       queuedUrls.delete(listingItem.detailUrl);
       const storyUid = storyUidFromUrl(listingItem.detailUrl);
       if (existingStoryIds.has(storyUid) || seenStoryIds.has(storyUid) || !isStoryUrl(listingItem.detailUrl)) continue;
+      console.log(`[sync] Starting story ${processedCount + 1}/${MAX_STORIES_PER_RUN}: ${listingItem.detailUrl}`);
+      const storyStartedAt = Date.now();
 
       const html = await fetchText(listingItem.detailUrl);
       const parsedStory = parseStoryPage(html, listingItem);
@@ -828,6 +848,7 @@ async function runSync() {
             return !existingStoryIds.has(childUid) && !seenStoryIds.has(childUid) && !queuedUrls.has(child.detailUrl);
           });
         if (children.length) {
+          console.log(`[sync] Expanded compilation story into ${children.length} child stories: ${listingItem.detailUrl}`);
           [...children].reverse().forEach((child) => {
             queue.unshift(child);
             queuedUrls.add(child.detailUrl);
@@ -847,6 +868,7 @@ async function runSync() {
       processedCount += 1;
       seenStoryIds.add(row.story_uid);
       existingStoryIds.add(row.story_uid);
+      console.log(`[sync] Saved story ${processedCount}/${MAX_STORIES_PER_RUN} in ${Math.round((Date.now() - storyStartedAt) / 1000)}s: ${row.story_uid}`);
       await supabase.from('better_india_sync_runs').update({
         story_count: processedCount,
         error_message: purgedInvalidCount ? `Removed ${purgedInvalidCount} invalid non-story rows before syncing.` : null,
@@ -871,6 +893,7 @@ async function runSync() {
       last_seen_latest_story_url: selection.latestUrl,
       backfill_next_page: selection.nextBackfillPage,
     });
+    console.log(`[sync] Completed successfully in ${Math.round((Date.now() - syncStartedAt) / 1000)}s with ${processedCount} stories.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Better India story sync failed.';
     await supabase.from('better_india_sync_runs').update({
@@ -880,6 +903,7 @@ async function runSync() {
       updated_at: new Date().toISOString(),
     }).eq('id', runId);
     await updateSyncState({ last_finished_at: new Date().toISOString() }).catch(() => null);
+    console.error(`[sync] Failed after ${Math.round((Date.now() - syncStartedAt) / 1000)}s: ${message}`);
     throw error;
   }
 }
