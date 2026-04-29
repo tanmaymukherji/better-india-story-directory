@@ -6,7 +6,6 @@ const storySyncPanel = document.getElementById('storySyncPanel');
 const storySyncMeta = document.getElementById('storySyncMeta');
 const storySyncRuns = document.getElementById('storySyncRuns');
 const runStorySyncButton = document.getElementById('runStorySync');
-const clearStorySyncRunsButton = document.getElementById('clearStorySyncRuns');
 const signOutButton = document.getElementById('signOutButton');
 const storySyncRunningIndicator = document.getElementById('storySyncRunningIndicator');
 const storySyncRunningText = document.getElementById('storySyncRunningText');
@@ -133,7 +132,8 @@ function renderStorySyncRuns(items) {
     if (!latestFinished && item.finished_at) latestFinished = item.finished_at;
     const card = document.createElement('article');
     card.className = 'admin-card';
-    card.innerHTML = `<div class="admin-card-header"><h4>${escapeHtml(item.status || 'unknown')}</h4><span class="admin-badge ${item.status === 'success' ? 'approved' : ''}">${escapeHtml(item.status || 'unknown')}</span></div><p><strong>Requested By:</strong> ${escapeHtml(item.requested_by || 'Unknown')}</p><p><strong>Started:</strong> ${escapeHtml(formatDate(item.started_at || item.created_at))}</p><p><strong>Finished:</strong> ${escapeHtml(formatDate(item.finished_at))}</p><p><strong>Stories:</strong> ${escapeHtml(String(item.story_count || 0))}</p><p><strong>Error:</strong> ${escapeHtml(item.error_message || 'None')}</p></article>`;
+    card.innerHTML = `<div class="admin-card-header"><h4>${escapeHtml(item.status || 'unknown')}</h4><span class="admin-badge ${item.status === 'success' ? 'approved' : ''}">${escapeHtml(item.status || 'unknown')}</span></div><p><strong>Requested By:</strong> ${escapeHtml(item.requested_by || 'Unknown')}</p><p><strong>Started:</strong> ${escapeHtml(formatDate(item.started_at || item.created_at))}</p><p><strong>Finished:</strong> ${escapeHtml(formatDate(item.finished_at))}</p><p><strong>Stories:</strong> ${escapeHtml(String(item.story_count || 0))}</p><p><strong>Error:</strong> ${escapeHtml(item.error_message || 'None')}</p><div class="btn-group"><button class="btn btn-danger btn-small" type="button" data-delete-sync-run="${escapeHtml(item.id || '')}">Delete Log</button></div></article>`;
+    card.querySelector('[data-delete-sync-run]')?.addEventListener('click', () => deleteStorySyncRun(item.id));
     storySyncRuns.appendChild(card);
   });
   return { hasRunning, latestFinished };
@@ -327,26 +327,19 @@ async function runStorySync() {
   }
 }
 
-async function clearStorySyncRuns() {
+async function deleteStorySyncRun(runId) {
   const token = getStoredToken();
-  if (!token) {
+  if (!token || !runId) {
     setStatus(sessionStatus, 'Sign in as admin first.', true);
     return;
   }
-  clearStorySyncRunsButton.disabled = true;
-  setStatus(sessionStatus, 'Clearing Better India sync logs...');
+  setStatus(sessionStatus, 'Deleting Better India sync log...');
   try {
-    const data = await window.BetterIndiaStore.adminRequest('deleteBetterIndiaSyncRuns', { token });
-    clearSyncPollTimer();
-    adminState.syncPendingRefresh = false;
-    adminState.syncQueuedAt = 0;
-    setRunningIndicator(false);
-    setStatus(sessionStatus, data.message || 'Better India sync logs cleared.');
+    const data = await window.BetterIndiaStore.adminRequest('deleteBetterIndiaSyncRun', { token, runId });
+    setStatus(sessionStatus, data.message || 'Better India sync log deleted.');
     await loadStorySyncRuns();
   } catch (error) {
-    setStatus(sessionStatus, error.message || 'Better India sync logs could not be cleared.', true);
-  } finally {
-    clearStorySyncRunsButton.disabled = false;
+    setStatus(sessionStatus, error.message || 'Better India sync log could not be deleted.', true);
   }
 }
 
@@ -446,7 +439,6 @@ editEls.sixMCategories.addEventListener('input', () => {
   renderSixMPreview(editEls.sixMCategories.value);
 });
 runStorySyncButton.addEventListener('click', runStorySync);
-clearStorySyncRunsButton.addEventListener('click', clearStorySyncRuns);
 adminEditForm.addEventListener('submit', saveStoryEdits);
 
 (async function initAdmin() {

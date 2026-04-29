@@ -196,13 +196,14 @@ async function handleListBetterIndiaSyncRuns(token: string) {
   return jsonResponse({ items: data || [] });
 }
 
-async function handleDeleteBetterIndiaSyncRuns(token: string) {
+async function handleDeleteBetterIndiaSyncRun(token: string, runId: string) {
   const session = await validateSession(token);
   if (!session) return errorResponse("Invalid admin session.", 401);
+  if (!runId) return errorResponse("Missing sync run id.", 400);
   const supabase = getSupabaseAdmin();
-  const { error } = await supabase.from("better_india_sync_runs").delete().not("id", "is", null);
-  if (error) return errorResponse("Better India sync logs could not be deleted.", 500);
-  return jsonResponse({ ok: true, message: "Better India sync logs cleared." });
+  const { error } = await supabase.from("better_india_sync_runs").delete().eq("id", runId);
+  if (error) return errorResponse("Better India sync log could not be deleted.", 500);
+  return jsonResponse({ ok: true, message: "Better India sync log deleted." });
 }
 
 async function geocodeStoryFallback(row: Record<string, unknown>) {
@@ -342,6 +343,7 @@ Deno.serve(async (request) => {
   const token = requireString(body.token);
   const password = requireString(body.password);
   const storyUid = requireString(body.storyUid);
+  const runId = requireString(body.runId);
   const updates = (body.updates && typeof body.updates === "object" && !Array.isArray(body.updates)) ? body.updates as Record<string, unknown> : {};
 
   switch (action) {
@@ -353,8 +355,8 @@ Deno.serve(async (request) => {
       return await handleLogout(token);
     case "listBetterIndiaSyncRuns":
       return await handleListBetterIndiaSyncRuns(token);
-    case "deleteBetterIndiaSyncRuns":
-      return await handleDeleteBetterIndiaSyncRuns(token);
+    case "deleteBetterIndiaSyncRun":
+      return await handleDeleteBetterIndiaSyncRun(token, runId);
     case "syncBetterIndiaStories":
       return await handleSyncBetterIndiaStories(token);
     case "updateBetterIndiaStory":
