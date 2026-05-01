@@ -20,6 +20,12 @@ const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_
 const HTTP_TIMEOUT_MS = Math.max(5000, Number(process.env.BETTER_INDIA_HTTP_TIMEOUT_MS || 30000));
 const GEMINI_TIMEOUT_MS = Math.max(8000, Number(process.env.BETTER_INDIA_GEMINI_TIMEOUT_MS || 45000));
 const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
+const INDIA_BOUNDS = {
+  minLat: 6,
+  maxLat: 38,
+  minLng: 68,
+  maxLng: 98,
+};
 const SIX_M_SIGNAL_MAP = {
   Manpower: /\b(training|trainings|trainer|trainers|trainee|trainees|capacity building|skill building|workshop|workshops)\b/i,
   Method: /\b(consulting|consultancy|consultant|mentoring|mentor|technology transfer|process|processes|workflow|protocol|sop|sops|standard operating procedure|manual|manuals|blog|blogs|video|videos|guide|guides)\b/i,
@@ -579,6 +585,32 @@ function toNullableNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function pointLooksUsable(lat, lng) {
+  return lat !== null && lng !== null && (Math.abs(lat) > 0.0001 || Math.abs(lng) > 0.0001);
+}
+
+function pointIsInsideIndia(lat, lng) {
+  return lat >= INDIA_BOUNDS.minLat &&
+    lat <= INDIA_BOUNDS.maxLat &&
+    lng >= INDIA_BOUNDS.minLng &&
+    lng <= INDIA_BOUNDS.maxLng;
+}
+
+function shouldForceIndiaBounds(row) {
+  const fields = [row.country, row.state, row.place_label, row.location_text, row.contact_address]
+    .map(normalizeText)
+    .filter(Boolean);
+  return fields.some((value) => value === 'india' || value.endsWith(', india') || value.includes(' india '));
+}
+
+function sanitizeCoordinates(row, latitude, longitude) {
+  if (!pointLooksUsable(latitude, longitude)) return { latitude: null, longitude: null };
+  if (shouldForceIndiaBounds(row) && !pointIsInsideIndia(latitude, longitude)) {
+    return { latitude: null, longitude: null };
+  }
+  return { latitude, longitude };
+}
+
 function buildGeocodeQueries(row) {
   const rawCandidates = [
     [row.contact_address, row.place_label, row.state, row.country || 'India'].filter(Boolean).join(', '),
@@ -613,8 +645,9 @@ async function geocodeStoryFallback(row) {
       const match = Array.isArray(data) ? data[0] : null;
       const latitude = toNullableNumber(match?.lat);
       const longitude = toNullableNumber(match?.lon);
-      if (latitude !== null && longitude !== null && (Math.abs(latitude) > 0.0001 || Math.abs(longitude) > 0.0001)) {
-        return { latitude, longitude };
+      const sanitized = sanitizeCoordinates(row, latitude, longitude);
+      if (sanitized.latitude !== null && sanitized.longitude !== null) {
+        return sanitized;
       }
     } catch {}
   }

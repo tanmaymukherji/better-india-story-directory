@@ -33,6 +33,12 @@ const paginationEls = [
   document.getElementById('results-pagination-bottom'),
 ];
 const DEFAULT_MARKER_HTML = '<div style="position:relative;width:20px;height:20px;border-radius:999px;background:#d97706;border:3px solid #fff;box-shadow:0 0 0 7px rgba(217,119,6,.18),0 8px 18px rgba(15,23,42,.24);"></div>';
+const INDIA_BOUNDS = {
+  minLat: 6,
+  maxLat: 38,
+  minLng: 68,
+  maxLng: 98,
+};
 
 function esc(value) {
   return String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
@@ -44,6 +50,30 @@ function normalizeText(value) {
 
 function tokenize(value) {
   return normalizeText(value).split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+function pointLooksUsable(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng) && (Math.abs(lat) > 0.0001 || Math.abs(lng) > 0.0001);
+}
+
+function pointIsInsideIndia(lat, lng) {
+  return lat >= INDIA_BOUNDS.minLat &&
+    lat <= INDIA_BOUNDS.maxLat &&
+    lng >= INDIA_BOUNDS.minLng &&
+    lng <= INDIA_BOUNDS.maxLng;
+}
+
+function shouldForceIndiaBounds(story) {
+  const fields = [story.country, story.state, story.place_label, story.location_text, story.contact_address]
+    .map(normalizeText)
+    .filter(Boolean);
+  return fields.some((value) => value === 'india' || value.endsWith(', india') || value.includes(' india '));
+}
+
+function getValidatedStoryPoint(story, lat, lng) {
+  if (!pointLooksUsable(lat, lng)) return null;
+  if (shouldForceIndiaBounds(story) && !pointIsInsideIndia(lat, lng)) return null;
+  return { lat, lng };
 }
 
 function uniqueSortedValues(values) {
@@ -568,8 +598,9 @@ async function geocodeStory(story) {
   if (directoryState.geocodeCache.has(cacheKey)) return directoryState.geocodeCache.get(cacheKey);
   const lat = Number(story.latitude);
   const lng = Number(story.longitude);
-  if (Number.isFinite(lat) && Number.isFinite(lng) && (Math.abs(lat) > 0.0001 || Math.abs(lng) > 0.0001)) {
-    const point = { lat, lng };
+  const storedPoint = getValidatedStoryPoint(story, lat, lng);
+  if (storedPoint) {
+    const point = storedPoint;
     directoryState.geocodeCache.set(cacheKey, point);
     return point;
   }
@@ -586,7 +617,8 @@ async function geocodeStory(story) {
       const data = await response.json();
       const match = Array.isArray(data) ? data[0] : null;
       if (!match) continue;
-      const point = { lat: Number(match.lat), lng: Number(match.lon) };
+      const point = getValidatedStoryPoint(story, Number(match?.lat), Number(match?.lon));
+      if (!point) continue;
       directoryState.geocodeCache.set(cacheKey, point);
       return point;
     } catch {}
