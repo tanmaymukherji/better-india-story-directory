@@ -24,7 +24,6 @@ const searchEls = {
   keyword: document.getElementById('search-keyword'),
 };
 const resultsEl = document.getElementById('vendor-results');
-const mapListEl = document.getElementById('map-results-list');
 const mapStoryPanelEl = document.getElementById('map-story-panel');
 const statusEl = document.getElementById('directory-status');
 const resultsSummaryEl = document.getElementById('results-summary');
@@ -63,17 +62,18 @@ function pointIsInsideIndia(lat, lng) {
     lng <= INDIA_BOUNDS.maxLng;
 }
 
-function shouldForceIndiaBounds(story) {
-  const fields = [story.country, story.state, story.place_label, story.location_text, story.contact_address]
-    .map(normalizeText)
-    .filter(Boolean);
-  return fields.some((value) => value === 'india' || value.endsWith(', india') || value.includes(' india '));
+function getValidatedStoryPoint(_story, lat, lng) {
+  if (!pointLooksUsable(lat, lng)) return null;
+  if (!pointIsInsideIndia(lat, lng)) return null;
+  return { lat, lng };
 }
 
-function getValidatedStoryPoint(story, lat, lng) {
-  if (!pointLooksUsable(lat, lng)) return null;
-  if (shouldForceIndiaBounds(story) && !pointIsInsideIndia(lat, lng)) return null;
-  return { lat, lng };
+function setDirectoryStatus(message = '', isError = false) {
+  if (!statusEl) return;
+  const text = String(message || '').trim();
+  statusEl.textContent = text;
+  statusEl.hidden = !text;
+  statusEl.classList.toggle('error', Boolean(isError));
 }
 
 function uniqueSortedValues(values) {
@@ -633,7 +633,6 @@ function clearMapMarkers() {
 
 async function renderMapResults() {
   if (!directoryState.hasSearched) {
-    mapListEl.innerHTML = '<div class="vendor-map-status">Run a search to display matching stories on the map.</div>';
     hideMapStoryPanel();
     const mapReady = await ensureMap();
     if (mapReady && directoryState.map) {
@@ -644,16 +643,6 @@ async function renderMapResults() {
     return;
   }
   const pageResults = getPageResults();
-  mapListEl.innerHTML = pageResults.length
-    ? pageResults.map((story) => `<article class="vendor-map-list-item" data-focus-story="${esc(story.story_uid)}"><strong>${esc(story.title)}</strong><span>${esc(story.person_name || 'Unknown person')} | ${esc(story.place_label || 'Place not listed')}</span><div class="btn-group"><a class="btn btn-small" href="./product-detail.html?story=${encodeURIComponent(story.story_uid)}">View Details</a><a class="btn btn-warning btn-small" href="${esc(story.story_url || '#')}" target="_blank" rel="noreferrer">View on Better India</a></div></article>`).join('')
-    : '<div class="vendor-map-placeholder">No map results for the current filter.</div>';
-  Array.from(mapListEl.querySelectorAll('[data-focus-story]')).forEach((button) => {
-    button.addEventListener('click', (event) => {
-      const target = event.target;
-      if (target instanceof Element && target.closest('a')) return;
-      focusStory(button.dataset.focusStory, { scroll: true });
-    });
-  });
   setSelectedStory(directoryState.selectedStoryId);
 
   const mapReady = await ensureMap();
@@ -686,9 +675,6 @@ async function renderMapResults() {
     directoryState.markers.push(marker);
     markerCount += 1;
   }
-  if (!markerCount && pageResults.length) {
-    mapListEl.insertAdjacentHTML('afterbegin', '<div class="vendor-map-status">Stories are listed here, but no usable coordinates could be derived from the current page of results yet.</div>');
-  }
   if (bounds.length && directoryState.map?.fitBounds) {
     directoryState.map.fitBounds(bounds, { padding: 60, maxZoom: 8 });
   } else if (directoryState.map?.setCenter) {
@@ -698,7 +684,7 @@ async function renderMapResults() {
 }
 
 async function initDirectory() {
-  statusEl.textContent = 'Loading Better India stories from Supabase...';
+  setDirectoryStatus('');
   try {
     const { stories, people } = await window.BetterIndiaStore.loadStories();
     directoryState.stories = stories;
@@ -712,7 +698,7 @@ async function initDirectory() {
     const snapshot = restoreSearchState();
     if (shouldRestoreSnapshot(params) && snapshot?.hasSearched) {
       restoreSavedSearch(snapshot);
-      statusEl.textContent = `${stories.length} Better India stor${stories.length === 1 ? 'y' : 'ies'} loaded from Supabase.`;
+      setDirectoryStatus('');
       return;
     }
     setCounts();
@@ -720,9 +706,9 @@ async function initDirectory() {
     renderPagination();
     updateResultsSummary();
     renderMapResults();
-    statusEl.textContent = `${stories.length} Better India stor${stories.length === 1 ? 'y' : 'ies'} loaded from Supabase.`;
+    setDirectoryStatus('');
   } catch (error) {
-    statusEl.textContent = error.message || 'Better India stories could not be loaded.';
+    setDirectoryStatus(error.message || 'Better India stories could not be loaded.', true);
   }
 }
 

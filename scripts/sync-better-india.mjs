@@ -4,6 +4,8 @@ import { load } from 'cheerio';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SELCO_VENDOR_SERVICE_ROLE_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const GEMINI_MODELS = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-flash-lite-latest,gemini-flash-latest,gemini-2.0-flash-lite,gemini-2.0-flash')
   .split(',')
   .map((value) => value.trim())
@@ -16,9 +18,11 @@ const LATEST_STORY_CHECKS_PER_RUN = 3;
 const MAX_COMPILATION_LINKS_PER_STORY = Math.max(2, Number(process.env.MAX_COMPILATION_LINKS_PER_STORY || 4));
 const GEMINI_REQUEST_DELAY_MS = Math.max(0, Number(process.env.GEMINI_REQUEST_DELAY_MS || 750));
 const GEMINI_MAX_STORY_CHARS = Math.max(3000, Number(process.env.GEMINI_MAX_STORY_CHARS || 9000));
-const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 20));
+const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 10));
 const HTTP_TIMEOUT_MS = Math.max(5000, Number(process.env.BETTER_INDIA_HTTP_TIMEOUT_MS || 30000));
 const GEMINI_TIMEOUT_MS = Math.max(8000, Number(process.env.BETTER_INDIA_GEMINI_TIMEOUT_MS || 45000));
+const SYNC_TIME_LIMIT_MS = Math.max(60_000, Number(process.env.BETTER_INDIA_RUN_TIMEOUT_MS || 600000));
+const DEEPSEEK_SWITCH_AFTER_MS = Math.max(60_000, Number(process.env.BETTER_INDIA_DEEPSEEK_SWITCH_MS || 300000));
 const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
 const INDIA_BOUNDS = {
   minLat: 6,
@@ -36,6 +40,7 @@ const SIX_M_SIGNAL_MAP = {
 };
 const USER_AGENT = 'Better India Story Directory Sync/2.0';
 let availableGeminiModelsPromise = null;
+const SYNC_TIMEOUT_MESSAGE = 'Timed Out beyond 10min';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.');
@@ -71,6 +76,30 @@ function sleep(ms) {
 function isTransientGeminiError(status, raw) {
   const text = String(raw || '');
   return status === 503 || status === 500 || /UNAVAILABLE|high demand|temporar|backendError/i.test(text);
+}
+
+function isTransientDeepSeekError(status, raw) {
+  const text = String(raw || '');
+  return status === 503 || status === 500 || status === 429 || /temporar|timeout|overload|busy|rate.?limit/i.test(text);
+}
+
+class SyncTimeoutError extends Error {
+  constructor(message = SYNC_TIMEOUT_MESSAGE) {
+    super(message);
+    this.name = 'SyncTimeoutError';
+  }
+}
+
+function getElapsedMs(syncStartedAt) {
+  return Date.now() - syncStartedAt;
+}
+
+function ensureSyncWithinLimit(syncStartedAt) {
+  if (getElapsedMs(syncStartedAt) >= SYNC_TIME_LIMIT_MS) throw new SyncTimeoutError();
+}
+
+function shouldPreferDeepSeek(syncStartedAt) {
+  return Boolean(DEEPSEEK_API_KEY) && getElapsedMs(syncStartedAt) >= DEEPSEEK_SWITCH_AFTER_MS;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = HTTP_TIMEOUT_MS) {
@@ -432,8 +461,8 @@ function buildCompilationChildren(listingItem, parsedStory) {
     }));
 }
 
-async function summarizeWithGemini(listingItem, parsedStory) {
-  const prompt = [
+function buildSummaryPrompt(listingItem, parsedStory) {
+  return [
     'Extract a structured summary from this Better India story.',
     'Return strict JSON only.',
     'Schema:',
@@ -463,13 +492,33 @@ async function summarizeWithGemini(listingItem, parsedStory) {
     `Published at: ${parsedStory.publishedAt || 'Unknown'}`,
     `Story body:\n${parsedStory.storyText.slice(0, GEMINI_MAX_STORY_CHARS)}`,
   ].join('\n');
+}
 
+function normalizeAiSummaryPayload(parsed) {
+  return {
+    person_name: cleanText(parsed.person_name) || null,
+    contributors: normalizeContributors(parsed.contributors),
+    contact_address: cleanText(parsed.contact_address) || null,
+    contact_email: cleanText(parsed.contact_email) || null,
+    contact_phone: cleanText(parsed.contact_phone) || null,
+    place: cleanText(parsed.place) || null,
+    thematic_area: cleanText(parsed.thematic_area) || null,
+    summary_of_work: cleanText(parsed.summary_of_work) || null,
+    process_steps: normalizeProcessSteps(parsed.process_steps),
+    six_m_categories: normalizeSixM(parsed.six_m_categories),
+    tags: normalizeTags(parsed.tags),
+  };
+}
+
+async function summarizeWithGeminiPrompt(prompt, syncStartedAt) {
   const candidateModels = await getUsableGeminiModels();
   let lastError = null;
   for (let modelIndex = 0; modelIndex < candidateModels.length; modelIndex += 1) {
+    ensureSyncWithinLimit(syncStartedAt);
     const modelName = candidateModels[modelIndex];
     if (modelIndex > 0) await sleep(1500);
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      ensureSyncWithinLimit(syncStartedAt);
       if (attempt > 0) await sleep(1500 * attempt);
       const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
         method: 'POST',
@@ -503,24 +552,72 @@ async function summarizeWithGemini(listingItem, parsedStory) {
       const parsed = parseJsonObject(text);
       return {
         aiModel: modelName,
-        summary: {
-          person_name: cleanText(parsed.person_name) || null,
-          contributors: normalizeContributors(parsed.contributors),
-          contact_address: cleanText(parsed.contact_address) || null,
-          contact_email: cleanText(parsed.contact_email) || null,
-          contact_phone: cleanText(parsed.contact_phone) || null,
-          place: cleanText(parsed.place) || null,
-          thematic_area: cleanText(parsed.thematic_area) || null,
-          summary_of_work: cleanText(parsed.summary_of_work) || null,
-          process_steps: normalizeProcessSteps(parsed.process_steps),
-          six_m_categories: normalizeSixM(parsed.six_m_categories),
-          tags: normalizeTags(parsed.tags),
-        },
+        summary: normalizeAiSummaryPayload(parsed),
       };
     }
   }
 
   throw lastError || new Error('Gemini summary generation failed for all configured models.');
+}
+
+async function summarizeWithDeepSeekPrompt(prompt, syncStartedAt) {
+  if (!DEEPSEEK_API_KEY) throw new Error('DeepSeek API key is not configured.');
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    ensureSyncWithinLimit(syncStartedAt);
+    if (attempt > 0) await sleep(1500 * attempt);
+    const response = await fetchWithTimeout('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: DEEPSEEK_MODEL,
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: 'You extract structured records from Better India stories and return strict JSON only.' },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    }, GEMINI_TIMEOUT_MS);
+    if (!response.ok) {
+      const raw = await response.text().catch(() => '');
+      if (isTransientDeepSeekError(response.status, raw)) {
+        lastError = new Error(`DeepSeek temporarily unavailable for ${DEEPSEEK_MODEL}. ${raw || `Request failed with status ${response.status}.`}`);
+        continue;
+      }
+      throw new Error(raw || `DeepSeek request failed (${response.status})`);
+    }
+    const data = await response.json();
+    const text = String(data?.choices?.[0]?.message?.content || '');
+    const parsed = parseJsonObject(text);
+    return {
+      aiModel: DEEPSEEK_MODEL,
+      summary: normalizeAiSummaryPayload(parsed),
+    };
+  }
+  throw lastError || new Error(`DeepSeek summary generation failed for ${DEEPSEEK_MODEL}.`);
+}
+
+async function summarizeStory(listingItem, parsedStory, syncStartedAt) {
+  const prompt = buildSummaryPrompt(listingItem, parsedStory);
+  const providers = shouldPreferDeepSeek(syncStartedAt)
+    ? ['deepseek', 'gemini']
+    : ['gemini', 'deepseek'];
+  let lastError = null;
+  for (const provider of providers) {
+    if (provider === 'deepseek' && !DEEPSEEK_API_KEY) continue;
+    try {
+      return provider === 'deepseek'
+        ? await summarizeWithDeepSeekPrompt(prompt, syncStartedAt)
+        : await summarizeWithGeminiPrompt(prompt, syncStartedAt);
+    } catch (error) {
+      if (error instanceof SyncTimeoutError) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('No AI provider could summarize this Better India story.');
 }
 
 async function fetchAvailableGeminiModels() {
@@ -698,7 +795,7 @@ async function markStaleRunningSyncs() {
     .update({
       status: 'failed',
       finished_at: new Date().toISOString(),
-      error_message: 'Marked failed because a newer sync started after this run stalled.',
+      error_message: SYNC_TIMEOUT_MESSAGE,
       updated_at: new Date().toISOString(),
     })
     .eq('status', 'running')
@@ -847,8 +944,10 @@ async function runSync() {
     .single();
   if (runError || !runData?.id) throw new Error('Better India sync run could not be created.');
   const runId = runData.id;
+  let processedCount = 0;
 
   try {
+    ensureSyncWithinLimit(syncStartedAt);
     const existingStoryIds = await loadExistingStoryIds();
     const selection = await chooseStoriesForRun(syncState, existingStoryIds);
     console.log(`[sync] Selected ${selection.selected.length} candidate stories. Purged invalid rows: ${purgedInvalidCount}.`);
@@ -872,12 +971,12 @@ async function runSync() {
       return;
     }
 
-    let processedCount = 0;
     const queue = [...selection.selected];
     const queuedUrls = new Set(queue.map((item) => item.detailUrl));
     const seenStoryIds = new Set();
 
     while (queue.length && processedCount < MAX_STORIES_PER_RUN) {
+      ensureSyncWithinLimit(syncStartedAt);
       const listingItem = queue.shift();
       if (!listingItem?.detailUrl) continue;
       queuedUrls.delete(listingItem.detailUrl);
@@ -904,7 +1003,7 @@ async function runSync() {
         }
       }
 
-      const { aiModel, summary: aiSummary } = await summarizeWithGemini(listingItem, parsedStory);
+      const { aiModel, summary: aiSummary } = await summarizeStory(listingItem, parsedStory, syncStartedAt);
       const row = buildStoryRow(listingItem, parsedStory, aiSummary, aiModel);
       const geocoded = await geocodeStoryFallback(row);
       row.latitude = geocoded.latitude;
@@ -942,10 +1041,13 @@ async function runSync() {
     });
     console.log(`[sync] Completed successfully in ${Math.round((Date.now() - syncStartedAt) / 1000)}s with ${processedCount} stories.`);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Better India story sync failed.';
+    const message = error instanceof SyncTimeoutError
+      ? SYNC_TIMEOUT_MESSAGE
+      : (error instanceof Error ? error.message : 'Better India story sync failed.');
     await supabase.from('better_india_sync_runs').update({
       status: 'failed',
       finished_at: new Date().toISOString(),
+      story_count: processedCount,
       error_message: message,
       updated_at: new Date().toISOString(),
     }).eq('id', runId);

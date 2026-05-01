@@ -12,7 +12,7 @@ const githubToken = Deno.env.get("GITHUB_ACTIONS_TOKEN") ?? Deno.env.get("GITHUB
 const githubRepoOwner = Deno.env.get("GITHUB_REPO_OWNER") ?? "tanmaymukherji";
 const githubRepoName = Deno.env.get("GITHUB_REPO_NAME") ?? "better-india-story-directory";
 const githubWorkflowId = Deno.env.get("GITHUB_WORKFLOW_ID") ?? "sync-better-india-directory.yml";
-const staleRunMinutes = Math.max(5, Number(Deno.env.get("BETTER_INDIA_STALE_RUN_MINUTES") ?? "20"));
+const staleRunMinutes = Math.max(5, Number(Deno.env.get("BETTER_INDIA_STALE_RUN_MINUTES") ?? "10"));
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
 const EDITABLE_STORY_FIELDS = [
@@ -186,7 +186,7 @@ async function handleListBetterIndiaSyncRuns(token: string) {
     .update({
       status: "failed",
       finished_at: new Date().toISOString(),
-      error_message: "Marked failed because the sync run exceeded the expected time window.",
+      error_message: "Timed Out beyond 10min",
       updated_at: new Date().toISOString(),
     })
     .eq("status", "running")
