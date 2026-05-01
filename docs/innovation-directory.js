@@ -631,6 +631,21 @@ function clearMapMarkers() {
   directoryState.markers = [];
 }
 
+function buildMapBounds(points) {
+  if (!Array.isArray(points) || !points.length) return null;
+  let minLat = points[0].lat;
+  let maxLat = points[0].lat;
+  let minLng = points[0].lng;
+  let maxLng = points[0].lng;
+  for (const point of points) {
+    minLat = Math.min(minLat, point.lat);
+    maxLat = Math.max(maxLat, point.lat);
+    minLng = Math.min(minLng, point.lng);
+    maxLng = Math.max(maxLng, point.lng);
+  }
+  return [[minLng, minLat], [maxLng, maxLat]];
+}
+
 async function renderMapResults() {
   if (!directoryState.hasSearched) {
     hideMapStoryPanel();
@@ -648,12 +663,12 @@ async function renderMapResults() {
   const mapReady = await ensureMap();
   if (!mapReady || !directoryState.map) return;
   clearMapMarkers();
-  const bounds = [];
+  const points = [];
   let markerCount = 0;
   for (const story of pageResults) {
     const point = await geocodeStory(story);
     if (!point) continue;
-    bounds.push([point.lat, point.lng]);
+    points.push(point);
     const marker = new window.mappls.Marker({
       map: directoryState.map,
       position: point,
@@ -675,8 +690,12 @@ async function renderMapResults() {
     directoryState.markers.push(marker);
     markerCount += 1;
   }
-  if (bounds.length && directoryState.map?.fitBounds) {
-    directoryState.map.fitBounds(bounds, { padding: 60, maxZoom: 8 });
+  if (points.length > 1 && directoryState.map?.fitBounds) {
+    const bounds = buildMapBounds(points);
+    if (bounds) directoryState.map.fitBounds(bounds, { padding: 60, maxZoom: 8 });
+  } else if (points.length === 1 && directoryState.map?.setCenter) {
+    directoryState.map.setCenter(points[0]);
+    directoryState.map.setZoom?.(8);
   } else if (directoryState.map?.setCenter) {
     directoryState.map.setCenter(INDIA_CENTER);
     directoryState.map.setZoom?.(4.8);
