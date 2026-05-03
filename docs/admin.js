@@ -96,13 +96,39 @@ function renderSixMPreview(value) {
 
 function extractPuterText(response) {
   if (typeof response === 'string') return response.trim();
-  const direct = String(
-    response?.message?.content ||
-    response?.content ||
-    response?.text ||
-    response?.result ||
-    ''
-  ).trim();
+  const candidates = [
+    response?.message?.content,
+    response?.content,
+    response?.text,
+    response?.result,
+    response?.message,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    if (Array.isArray(candidate)) {
+      const joined = candidate
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (typeof item?.text === 'string') return item.text;
+          if (typeof item?.content === 'string') return item.content;
+          return '';
+        })
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      if (joined) return joined;
+    }
+    if (candidate && typeof candidate === 'object') {
+      const nested = String(
+        candidate.text ||
+        candidate.content ||
+        candidate.message ||
+        ''
+      ).trim();
+      if (nested) return nested;
+    }
+  }
+  const direct = '';
   if (direct) return direct;
   return JSON.stringify(response || {});
 }
