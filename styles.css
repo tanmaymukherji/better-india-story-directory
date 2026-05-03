@@ -93,6 +93,10 @@ a{text-decoration:none}
 .admin-6m-helper p{margin:0 0 .55rem;color:#334155}
 .admin-6m-list{margin:0;padding-left:1rem;color:#536171;display:grid;gap:.3rem;line-height:1.5}
 .admin-6m-list li{margin:0}
+.admin-ai-helper{margin:1rem 0;padding:1rem;border:1px solid #d7e0e7;border-radius:14px;background:linear-gradient(135deg,#f8fbfd,#eef5fa);display:grid;gap:.8rem}
+.admin-ai-helper-header{display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem}
+.admin-ai-helper-header h4{margin:0 0 .25rem}
+.admin-ai-helper-header p{margin:0;color:#536171;line-height:1.5}
 .innovation-detail-hero{display:grid;grid-template-columns:minmax(280px,360px) 1fr;gap:1rem;align-items:start}
 .innovation-detail-summary{display:grid;gap:.8rem}
 .innovation-chip-row{display:flex;flex-wrap:wrap;gap:.45rem}

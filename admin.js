@@ -19,6 +19,11 @@ const adminEditorFields = document.getElementById('adminEditorFields');
 const adminEditStatus = document.getElementById('adminEditStatus');
 const saveStoryButton = document.getElementById('saveStoryButton');
 const sixMPreview = document.getElementById('sixMPreview');
+const puterModelSelect = document.getElementById('puterModelSelect');
+const refreshPuterModelsButton = document.getElementById('refreshPuterModels');
+const puterRewriteSummaryButton = document.getElementById('puterRewriteSummary');
+const puterSuggestMetadataButton = document.getElementById('puterSuggestMetadata');
+const puterStatus = document.getElementById('puterStatus');
 
 const ADMIN_SESSION_KEY = 'better-india-admin-session';
 const SIX_M_OPTIONS = ['Manpower', 'Method', 'Material', 'Machine', 'Money', 'Market'];
@@ -29,6 +34,8 @@ const adminState = {
   syncPollTimer: null,
   syncPendingRefresh: false,
   syncQueuedAt: 0,
+  puterModelsLoaded: false,
+  puterModels: [],
 };
 
 const editEls = {
@@ -52,6 +59,11 @@ const editEls = {
 function setStatus(element, message, isError = false) {
   element.textContent = message || '';
   element.classList.toggle('error', Boolean(isError));
+}
+
+function setPuterStatus(message, isError = false) {
+  if (!puterStatus) return;
+  setStatus(puterStatus, message, isError);
 }
 
 function escapeHtml(value) {
@@ -80,6 +92,128 @@ function renderSixMPreview(value) {
   sixMPreview.innerHTML = items.length
     ? items.map((item) => `<span class="innovation-chip">${escapeHtml(item)}</span>`).join('')
     : '<span class="innovation-chip innovation-chip-muted">No valid 6M categories selected</span>';
+}
+
+function extractPuterText(response) {
+  if (typeof response === 'string') return response.trim();
+  const direct = String(
+    response?.message?.content ||
+    response?.content ||
+    response?.text ||
+    response?.result ||
+    ''
+  ).trim();
+  if (direct) return direct;
+  return JSON.stringify(response || {});
+}
+
+function stripCodeFences(value) {
+  return String(value || '').replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+}
+
+function parseJsonObject(text) {
+  const cleaned = stripCodeFences(text);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('AI response did not contain valid JSON.');
+    return JSON.parse(match[0]);
+  }
+}
+
+function uniqueList(values) {
+  return [...new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function normalizePuterModelEntries(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => {
+      if (typeof item === 'string') return { id: item, name: item };
+      const id = String(item?.id || item?.model || item?.name || '').trim();
+      const name = String(item?.name || item?.label || item?.id || id).trim();
+      return id ? { id, name } : null;
+    })
+    .filter(Boolean);
+}
+
+function getSelectedStory() {
+  return adminState.stories.find((item) => item.story_uid === adminState.selectedStoryId) || null;
+}
+
+function getChosenPuterModel() {
+  return String(puterModelSelect?.value || '').trim() || null;
+}
+
+function buildPuterContext(story) {
+  return {
+    story_uid: story.story_uid,
+    title: story.title || null,
+    person_name: story.person_name || null,
+    thematic_area: story.thematic_area || null,
+    place_label: story.place_label || null,
+    contact_email: story.contact_email || null,
+    contact_phone: story.contact_phone || null,
+    contact_address: story.contact_address || null,
+    six_m_categories: story.six_m_categories || [],
+    tags: story.tags || [],
+    summary_of_work: story.summary_of_work || null,
+    story_excerpt: story.story_excerpt || null,
+    story_url: story.story_url || null,
+    admin_notes: story.admin_notes || null,
+    ai_summary: story.ai_summary || null,
+    raw_story: story.raw_story || null,
+  };
+}
+
+async function ensurePuterModelsLoaded(forceRefresh = false) {
+  if (!window.puter?.ai) {
+    throw new Error('Puter AI is not available on this page.');
+  }
+  if (adminState.puterModelsLoaded && !forceRefresh) return adminState.puterModels;
+  setPuterStatus('Loading Puter models...');
+  const result = await window.puter.ai.listModels();
+  const models = normalizePuterModelEntries(result);
+  adminState.puterModels = models;
+  adminState.puterModelsLoaded = true;
+  if (puterModelSelect) {
+    const previous = getChosenPuterModel();
+    puterModelSelect.innerHTML = '<option value="">Default Puter model</option>';
+    models.slice(0, 200).forEach((model) => {
+      const option = document.createElement('option');
+      option.value = model.id;
+      option.textContent = model.name;
+      puterModelSelect.appendChild(option);
+    });
+    if (previous && models.some((model) => model.id === previous)) {
+      puterModelSelect.value = previous;
+    }
+  }
+  setPuterStatus(models.length ? `Loaded ${models.length} Puter model options.` : 'No Puter models were returned.');
+  return models;
+}
+
+async function runPuterChat(prompt) {
+  await ensurePuterModelsLoaded(false);
+  const model = getChosenPuterModel();
+  const options = model ? { model } : {};
+  const response = await window.puter.ai.chat(prompt, options);
+  return extractPuterText(response);
+}
+
+function applyPuterMetadata(payload) {
+  if (payload.person_name) editEls.personName.value = String(payload.person_name).trim();
+  if (payload.thematic_area) editEls.thematicArea.value = String(payload.thematic_area).trim();
+  if (payload.place_label) editEls.placeLabel.value = String(payload.place_label).trim();
+  if (payload.contact_email) editEls.contactEmail.value = String(payload.contact_email).trim();
+  if (payload.contact_phone) editEls.contactPhone.value = String(payload.contact_phone).trim();
+  if (payload.contact_address) editEls.contactAddress.value = String(payload.contact_address).trim();
+  if (payload.summary_of_work) editEls.storySummary.value = String(payload.summary_of_work).trim();
+  if (Array.isArray(payload.tags)) editEls.tags.value = uniqueList(payload.tags).join(', ');
+  if (Array.isArray(payload.six_m_categories)) {
+    editEls.sixMCategories.value = normalizeSixMValues((payload.six_m_categories || []).join(', ')).join(', ');
+    renderSixMPreview(editEls.sixMCategories.value);
+  }
 }
 
 function getStoredToken() {
@@ -204,6 +338,7 @@ function fillEditor(story) {
   editEls.longitude.value = story.longitude ?? '';
   editEls.adminNotes.value = story.admin_notes || '';
   renderSixMPreview(editEls.sixMCategories.value);
+  setPuterStatus('Puter AI assist is ready for this story.');
   setEditorVisible(true);
 }
 
@@ -386,6 +521,70 @@ async function saveStoryEdits(event) {
   }
 }
 
+async function rewriteSummaryWithPuter() {
+  const story = getSelectedStory();
+  if (!story) {
+    setPuterStatus('Select a story record first.', true);
+    return;
+  }
+  puterRewriteSummaryButton.disabled = true;
+  setPuterStatus('Asking Puter to rewrite the summary...');
+  try {
+    const prompt = [
+      'Rewrite the Better India story summary for an admin editor.',
+      'Return strict JSON only with this schema:',
+      '{"summary_of_work":string}',
+      'Requirements:',
+      '- Make the summary useful and specific, not generic.',
+      '- Mention concrete actions, outcomes, and named contributors where relevant.',
+      '- If the story describes a process, include the essential steps in prose.',
+      '- Keep it concise enough for an admin summary field.',
+      `Current record:\n${JSON.stringify(buildPuterContext(story))}`,
+    ].join('\n');
+    const text = await runPuterChat(prompt);
+    const payload = parseJsonObject(text);
+    if (!payload?.summary_of_work) throw new Error('Puter did not return a rewritten summary.');
+    editEls.storySummary.value = String(payload.summary_of_work).trim();
+    setPuterStatus('Summary updated from Puter AI. Review and save when ready.');
+  } catch (error) {
+    setPuterStatus(error.message || 'Puter summary rewrite failed.', true);
+  } finally {
+    puterRewriteSummaryButton.disabled = false;
+  }
+}
+
+async function suggestMetadataWithPuter() {
+  const story = getSelectedStory();
+  if (!story) {
+    setPuterStatus('Select a story record first.', true);
+    return;
+  }
+  puterSuggestMetadataButton.disabled = true;
+  setPuterStatus('Asking Puter to suggest metadata...');
+  try {
+    const prompt = [
+      'Improve this Better India story record for an admin editor.',
+      'Return strict JSON only with this schema:',
+      '{"person_name":string|null,"thematic_area":string|null,"place_label":string|null,"contact_email":string|null,"contact_phone":string|null,"contact_address":string|null,"six_m_categories":string[],"tags":string[],"summary_of_work":string|null}',
+      'Rules:',
+      '- six_m_categories must only use: Manpower, Method, Material, Machine, Money, Market.',
+      '- Use the strict 6M meanings already present in the record.',
+      '- Only suggest contact details if the context strongly supports them.',
+      '- Tags should be short and admin-friendly.',
+      '- If a field should stay unchanged, you may repeat the current value.',
+      `Current record:\n${JSON.stringify(buildPuterContext(story))}`,
+    ].join('\n');
+    const text = await runPuterChat(prompt);
+    const payload = parseJsonObject(text);
+    applyPuterMetadata(payload || {});
+    setPuterStatus('Metadata suggestions applied from Puter AI. Review and save when ready.');
+  } catch (error) {
+    setPuterStatus(error.message || 'Puter metadata assist failed.', true);
+  } finally {
+    puterSuggestMetadataButton.disabled = false;
+  }
+}
+
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const password = String(document.getElementById('adminPassword').value || '').trim();
@@ -438,11 +637,28 @@ adminSearchInput.addEventListener('input', () => {
 editEls.sixMCategories.addEventListener('input', () => {
   renderSixMPreview(editEls.sixMCategories.value);
 });
+refreshPuterModelsButton?.addEventListener('click', async () => {
+  refreshPuterModelsButton.disabled = true;
+  try {
+    await ensurePuterModelsLoaded(true);
+  } catch (error) {
+    setPuterStatus(error.message || 'Puter models could not be loaded.', true);
+  } finally {
+    refreshPuterModelsButton.disabled = false;
+  }
+});
+puterRewriteSummaryButton?.addEventListener('click', rewriteSummaryWithPuter);
+puterSuggestMetadataButton?.addEventListener('click', suggestMetadataWithPuter);
 runStorySyncButton.addEventListener('click', runStorySync);
 adminEditForm.addEventListener('submit', saveStoryEdits);
 
 (async function initAdmin() {
   updateSessionUi(false);
+  if (window.puter?.ai) {
+    setPuterStatus('Puter AI assist is available. Select a story, then load models or use the default model.');
+  } else {
+    setPuterStatus('Puter AI did not load on this page.', true);
+  }
   const valid = await verifySession();
   if (valid) {
     await Promise.all([refreshSyncMonitor(), loadAdminStories()]);
