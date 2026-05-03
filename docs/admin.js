@@ -161,6 +161,43 @@ function uniqueList(values) {
   return [...new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean))];
 }
 
+function normalizeContributorList(values) {
+  const list = Array.isArray(values) ? values : [];
+  const seen = new Set();
+  const output = [];
+  for (const value of list) {
+    const name = String(value?.name || '').trim();
+    const contribution = String(value?.contribution || '').trim();
+    if (!name && !contribution) continue;
+    const key = `${name.toLowerCase()}|${contribution.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push({ name, contribution });
+  }
+  return output.slice(0, 12);
+}
+
+function normalizeStepList(values) {
+  return uniqueList(Array.isArray(values) ? values.map((value) => String(value || '').trim()) : []).slice(0, 12);
+}
+
+function buildStructuredSummary(summary, contributors = [], processSteps = []) {
+  const sections = [];
+  const cleanSummary = String(summary || '').trim();
+  if (cleanSummary) sections.push(cleanSummary);
+  if (contributors.length) {
+    sections.push(`People and actions: ${contributors.map((item) => {
+      const name = String(item?.name || '').trim() || 'Contributor';
+      const contribution = String(item?.contribution || '').trim() || 'No specific contribution noted.';
+      return `${name}: ${contribution}`;
+    }).join(' ')}`);
+  }
+  if (processSteps.length) {
+    sections.push(`Process steps: ${processSteps.map((step, index) => `${index + 1}. ${step}`).join(' ')}`);
+  }
+  return sections.join('\n\n').trim();
+}
+
 function normalizePuterModelEntries(items) {
   return (Array.isArray(items) ? items : [])
     .map((item) => {
@@ -573,15 +610,17 @@ async function rewriteSummaryWithPuter() {
     const prompt = [
       'Rewrite the Better India story summary for an admin editor.',
       'Prefer returning strict JSON only with this schema:',
-      '{"person_name":string|null,"summary_of_work":string,"six_m_categories":string[]}',
+      '{"person_name":string|null,"summary_of_work":string,"contributors":[{"name":string|null,"contribution":string|null}],"process_steps":string[],"six_m_categories":string[]}',
       'If you cannot return JSON, return only the rewritten summary text with no introduction.',
       'Requirements:',
       '- Keep the summary structure aligned with existing saved records.',
       '- Preserve clear person identification. person_name should remain explicit and should not disappear.',
-      '- summary_of_work must be useful and specific, not generic.',
+      '- summary_of_work must be useful and specific, not generic. It should be the opening paragraph only.',
+      '- contributors must clearly capture named people separately, so they can appear under a distinct "People and actions" section.',
+      '- process_steps must capture concrete steps separately whenever the story describes a process, method, routine, or action sequence.',
       '- Mention concrete actions, outcomes, and named contributors where relevant.',
-      '- If the story describes a process, include the essential steps in prose.',
-      '- Keep the summary suitable for the same admin summary field already used in the directory.',
+      '- Keep the final output suitable for the same admin summary field already used in the directory.',
+      '- The final saved structure should read like: main summary, then "People and actions:", then "Process steps:" when available.',
       '- six_m_categories must only use: Manpower, Method, Material, Machine, Money, Market.',
       '- Use the strict 6M meanings already present in the record.',
       `- Apply update mode: ${updateMode}. If mode is summary, still return six_m_categories only if clearly inferable. If mode is sixm, still return summary_of_work but prioritize six_m_categories accuracy.`,
@@ -589,7 +628,11 @@ async function rewriteSummaryWithPuter() {
     ].join('\n');
     const text = await runPuterChat(prompt);
     const payload = parseJsonObjectOrNull(text);
-    const rewritten = String(payload?.summary_of_work || text || '').trim();
+    const contributors = normalizeContributorList(payload?.contributors);
+    const processSteps = normalizeStepList(payload?.process_steps);
+    const rewritten = payload
+      ? buildStructuredSummary(payload?.summary_of_work, contributors, processSteps)
+      : String(text || '').trim();
     if (!rewritten) throw new Error('Puter did not return a rewritten summary.');
     if (payload?.person_name) {
       editEls.personName.value = String(payload.person_name).trim();
@@ -626,18 +669,26 @@ async function suggestMetadataWithPuter() {
     const prompt = [
       'Improve this Better India story record for an admin editor.',
       'Return strict JSON only with this schema:',
-      '{"person_name":string|null,"thematic_area":string|null,"place_label":string|null,"contact_email":string|null,"contact_phone":string|null,"contact_address":string|null,"six_m_categories":string[],"tags":string[],"summary_of_work":string|null}',
+      '{"person_name":string|null,"thematic_area":string|null,"place_label":string|null,"contact_email":string|null,"contact_phone":string|null,"contact_address":string|null,"six_m_categories":string[],"tags":string[],"summary_of_work":string|null,"contributors":[{"name":string|null,"contribution":string|null}],"process_steps":string[]}',
       'Rules:',
       '- six_m_categories must only use: Manpower, Method, Material, Machine, Money, Market.',
       '- Use the strict 6M meanings already present in the record.',
       '- Only suggest contact details if the context strongly supports them.',
       '- Tags should be short and admin-friendly.',
+      '- If you improve the summary, keep the same structure used in existing records: main summary, then "People and actions:", then "Process steps:" when relevant.',
       '- If a field should stay unchanged, you may repeat the current value.',
       `Current record:\n${JSON.stringify(buildPuterContext(story))}`,
     ].join('\n');
     const text = await runPuterChat(prompt);
     const payload = parseJsonObjectOrNull(text);
     if (!payload) throw new Error('Puter returned free text instead of structured metadata JSON. Try another Puter model.');
+    if (payload.summary_of_work) {
+      payload.summary_of_work = buildStructuredSummary(
+        payload.summary_of_work,
+        normalizeContributorList(payload.contributors),
+        normalizeStepList(payload.process_steps)
+      );
+    }
     applyPuterMetadata(payload || {});
     setPuterStatus('Metadata suggestions applied from Puter AI. Review and save when ready.');
   } catch (error) {
