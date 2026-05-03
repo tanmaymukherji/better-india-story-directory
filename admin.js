@@ -122,6 +122,14 @@ function parseJsonObject(text) {
   }
 }
 
+function parseJsonObjectOrNull(text) {
+  try {
+    return parseJsonObject(text);
+  } catch {
+    return null;
+  }
+}
+
 function uniqueList(values) {
   return [...new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean))];
 }
@@ -532,8 +540,9 @@ async function rewriteSummaryWithPuter() {
   try {
     const prompt = [
       'Rewrite the Better India story summary for an admin editor.',
-      'Return strict JSON only with this schema:',
+      'Prefer returning strict JSON only with this schema:',
       '{"summary_of_work":string}',
+      'If you cannot return JSON, return only the rewritten summary text with no introduction.',
       'Requirements:',
       '- Make the summary useful and specific, not generic.',
       '- Mention concrete actions, outcomes, and named contributors where relevant.',
@@ -542,9 +551,10 @@ async function rewriteSummaryWithPuter() {
       `Current record:\n${JSON.stringify(buildPuterContext(story))}`,
     ].join('\n');
     const text = await runPuterChat(prompt);
-    const payload = parseJsonObject(text);
-    if (!payload?.summary_of_work) throw new Error('Puter did not return a rewritten summary.');
-    editEls.storySummary.value = String(payload.summary_of_work).trim();
+    const payload = parseJsonObjectOrNull(text);
+    const rewritten = String(payload?.summary_of_work || text || '').trim();
+    if (!rewritten) throw new Error('Puter did not return a rewritten summary.');
+    editEls.storySummary.value = rewritten;
     setPuterStatus('Summary updated from Puter AI. Review and save when ready.');
   } catch (error) {
     setPuterStatus(error.message || 'Puter summary rewrite failed.', true);
@@ -575,7 +585,8 @@ async function suggestMetadataWithPuter() {
       `Current record:\n${JSON.stringify(buildPuterContext(story))}`,
     ].join('\n');
     const text = await runPuterChat(prompt);
-    const payload = parseJsonObject(text);
+    const payload = parseJsonObjectOrNull(text);
+    if (!payload) throw new Error('Puter returned free text instead of structured metadata JSON. Try another Puter model.');
     applyPuterMetadata(payload || {});
     setPuterStatus('Metadata suggestions applied from Puter AI. Review and save when ready.');
   } catch (error) {
