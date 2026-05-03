@@ -20,6 +20,7 @@ const adminEditStatus = document.getElementById('adminEditStatus');
 const saveStoryButton = document.getElementById('saveStoryButton');
 const sixMPreview = document.getElementById('sixMPreview');
 const puterModelSelect = document.getElementById('puterModelSelect');
+const puterUpdateModeSelect = document.getElementById('puterUpdateMode');
 const refreshPuterModelsButton = document.getElementById('refreshPuterModels');
 const puterRewriteSummaryButton = document.getElementById('puterRewriteSummary');
 const puterSuggestMetadataButton = document.getElementById('puterSuggestMetadata');
@@ -177,6 +178,10 @@ function getSelectedStory() {
 
 function getChosenPuterModel() {
   return String(puterModelSelect?.value || '').trim() || null;
+}
+
+function getPuterUpdateMode() {
+  return String(puterUpdateModeSelect?.value || 'both').trim();
 }
 
 function buildPuterContext(story) {
@@ -564,30 +569,44 @@ async function rewriteSummaryWithPuter() {
   puterRewriteSummaryButton.disabled = true;
   setPuterStatus('Asking Puter to rewrite the summary...');
   try {
+    const updateMode = getPuterUpdateMode();
     const prompt = [
       'Rewrite the Better India story summary for an admin editor.',
       'Prefer returning strict JSON only with this schema:',
-      '{"summary_of_work":string,"six_m_categories":string[]}',
+      '{"person_name":string|null,"summary_of_work":string,"six_m_categories":string[]}',
       'If you cannot return JSON, return only the rewritten summary text with no introduction.',
       'Requirements:',
-      '- Make the summary useful and specific, not generic.',
+      '- Keep the summary structure aligned with existing saved records.',
+      '- Preserve clear person identification. person_name should remain explicit and should not disappear.',
+      '- summary_of_work must be useful and specific, not generic.',
       '- Mention concrete actions, outcomes, and named contributors where relevant.',
       '- If the story describes a process, include the essential steps in prose.',
-      '- Keep it concise enough for an admin summary field.',
+      '- Keep the summary suitable for the same admin summary field already used in the directory.',
       '- six_m_categories must only use: Manpower, Method, Material, Machine, Money, Market.',
       '- Use the strict 6M meanings already present in the record.',
+      `- Apply update mode: ${updateMode}. If mode is summary, still return six_m_categories only if clearly inferable. If mode is sixm, still return summary_of_work but prioritize six_m_categories accuracy.`,
       `Current record:\n${JSON.stringify(buildPuterContext(story))}`,
     ].join('\n');
     const text = await runPuterChat(prompt);
     const payload = parseJsonObjectOrNull(text);
     const rewritten = String(payload?.summary_of_work || text || '').trim();
     if (!rewritten) throw new Error('Puter did not return a rewritten summary.');
-    editEls.storySummary.value = rewritten;
-    if (Array.isArray(payload?.six_m_categories)) {
+    if (payload?.person_name) {
+      editEls.personName.value = String(payload.person_name).trim();
+    }
+    if (updateMode !== 'sixm') {
+      editEls.storySummary.value = rewritten;
+    }
+    if (updateMode !== 'summary' && Array.isArray(payload?.six_m_categories)) {
       editEls.sixMCategories.value = normalizeSixMValues((payload.six_m_categories || []).join(', ')).join(', ');
       renderSixMPreview(editEls.sixMCategories.value);
     }
-    setPuterStatus('Summary and 6M suggestions updated from Puter AI. Review and save when ready.');
+    const statusMap = {
+      both: 'Summary, person name, and 6M suggestions updated from Puter AI. Review and save when ready.',
+      summary: 'Summary and person name updated from Puter AI. Review and save when ready.',
+      sixm: '6M and person name suggestions updated from Puter AI. Review and save when ready.',
+    };
+    setPuterStatus(statusMap[updateMode] || 'Puter suggestions applied. Review and save when ready.');
   } catch (error) {
     setPuterStatus(error.message || 'Puter summary rewrite failed.', true);
   } finally {
