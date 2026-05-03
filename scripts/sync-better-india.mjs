@@ -6,6 +6,11 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || proce
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const OPENROUTER_MODELS = (process.env.OPENROUTER_MODELS || 'deepseek/deepseek-chat-v3.1,google/gemini-2.5-flash,openai/gpt-4.1-mini,anthropic/claude-3.5-haiku')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 const GEMINI_MODELS = (process.env.GEMINI_MODELS || 'gemini-2.5-flash-lite,gemini-2.5-flash,gemini-flash-lite-latest,gemini-flash-latest,gemini-2.0-flash-lite,gemini-2.0-flash')
   .split(',')
   .map((value) => value.trim())
@@ -40,6 +45,7 @@ const SIX_M_SIGNAL_MAP = {
 };
 const USER_AGENT = 'Better India Story Directory Sync/2.0';
 let availableGeminiModelsPromise = null;
+let availableOpenRouterModelsPromise = null;
 const SYNC_TIMEOUT_MESSAGE = 'Timed Out beyond 10min';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -81,6 +87,11 @@ function isTransientGeminiError(status, raw) {
 function isTransientDeepSeekError(status, raw) {
   const text = String(raw || '');
   return status === 503 || status === 500 || status === 429 || /temporar|timeout|overload|busy|rate.?limit/i.test(text);
+}
+
+function isTransientOpenRouterError(status, raw) {
+  const text = String(raw || '');
+  return status === 503 || status === 500 || status === 429 || /temporar|timeout|overload|busy|rate.?limit|provider unavailable/i.test(text);
 }
 
 class SyncTimeoutError extends Error {
@@ -600,18 +611,104 @@ async function summarizeWithDeepSeekPrompt(prompt, syncStartedAt) {
   throw lastError || new Error(`DeepSeek summary generation failed for ${DEEPSEEK_MODEL}.`);
 }
 
+async function fetchAvailableOpenRouterModels() {
+  const response = await fetchWithTimeout('https://openrouter.ai/api/v1/models', {
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+    },
+  }, GEMINI_TIMEOUT_MS);
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '');
+    throw new Error(raw || `OpenRouter models list failed (${response.status})`);
+  }
+  const data = await response.json();
+  return (Array.isArray(data?.data) ? data.data : [])
+    .map((model) => requireString(model?.id))
+    .filter(Boolean);
+}
+
+async function getUsableOpenRouterModels() {
+  if (!OPENROUTER_API_KEY) throw new Error('OpenRouter API key is not configured.');
+  if (!availableOpenRouterModelsPromise) {
+    availableOpenRouterModelsPromise = fetchAvailableOpenRouterModels().catch((error) => {
+      availableOpenRouterModelsPromise = null;
+      throw error;
+    });
+  }
+  const availableModels = await availableOpenRouterModelsPromise;
+  const availableSet = new Set(availableModels);
+  const preferredModels = OPENROUTER_MODELS.filter((name) => availableSet.has(name));
+  if (preferredModels.length) return preferredModels;
+
+  const sensibleFallbacks = availableModels.filter((name) => /(deepseek|gemini|gpt|claude|haiku|flash)/i.test(name));
+  if (sensibleFallbacks.length) return sensibleFallbacks.slice(0, 8);
+
+  if (availableModels.length) return availableModels.slice(0, 8);
+  throw new Error('No OpenRouter models were returned for this API key.');
+}
+
+async function summarizeWithOpenRouterPrompt(prompt, syncStartedAt) {
+  const candidateModels = await getUsableOpenRouterModels();
+  let lastError = null;
+  for (let modelIndex = 0; modelIndex < candidateModels.length; modelIndex += 1) {
+    ensureSyncWithinLimit(syncStartedAt);
+    const modelName = candidateModels[modelIndex];
+    if (modelIndex > 0) await sleep(1500);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      ensureSyncWithinLimit(syncStartedAt);
+      if (attempt > 0) await sleep(1500 * attempt);
+      const response = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: modelName,
+          temperature: 0.1,
+          max_tokens: 1400,
+          messages: [
+            { role: 'system', content: 'You extract structured records from Better India stories and return strict JSON only.' },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      }, GEMINI_TIMEOUT_MS);
+      if (!response.ok) {
+        const raw = await response.text().catch(() => '');
+        if (isTransientOpenRouterError(response.status, raw)) {
+          lastError = new Error(`OpenRouter temporarily unavailable for ${modelName}. ${raw || `Request failed with status ${response.status}.`}`);
+          if (attempt < 2) continue;
+          break;
+        }
+        throw new Error(raw || `OpenRouter request failed (${response.status})`);
+      }
+      const data = await response.json();
+      const text = String(data?.choices?.[0]?.message?.content || '');
+      const parsed = parseJsonObject(text);
+      return {
+        aiModel: modelName,
+        summary: normalizeAiSummaryPayload(parsed),
+      };
+    }
+  }
+  throw lastError || new Error('OpenRouter summary generation failed for all configured models.');
+}
+
 async function summarizeStory(listingItem, parsedStory, syncStartedAt) {
   const prompt = buildSummaryPrompt(listingItem, parsedStory);
   const providers = shouldPreferDeepSeek(syncStartedAt)
-    ? ['deepseek', 'gemini']
-    : ['gemini', 'deepseek'];
+    ? ['deepseek', 'openrouter', 'gemini']
+    : ['gemini', 'deepseek', 'openrouter'];
   let lastError = null;
   for (const provider of providers) {
     if (provider === 'deepseek' && !DEEPSEEK_API_KEY) continue;
+    if (provider === 'openrouter' && !OPENROUTER_API_KEY) continue;
     try {
-      return provider === 'deepseek'
-        ? await summarizeWithDeepSeekPrompt(prompt, syncStartedAt)
-        : await summarizeWithGeminiPrompt(prompt, syncStartedAt);
+      if (provider === 'deepseek') return await summarizeWithDeepSeekPrompt(prompt, syncStartedAt);
+      if (provider === 'openrouter') return await summarizeWithOpenRouterPrompt(prompt, syncStartedAt);
+      return await summarizeWithGeminiPrompt(prompt, syncStartedAt);
     } catch (error) {
       if (error instanceof SyncTimeoutError) throw error;
       lastError = error;
