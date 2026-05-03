@@ -567,13 +567,15 @@ async function rewriteSummaryWithPuter() {
     const prompt = [
       'Rewrite the Better India story summary for an admin editor.',
       'Prefer returning strict JSON only with this schema:',
-      '{"summary_of_work":string}',
+      '{"summary_of_work":string,"six_m_categories":string[]}',
       'If you cannot return JSON, return only the rewritten summary text with no introduction.',
       'Requirements:',
       '- Make the summary useful and specific, not generic.',
       '- Mention concrete actions, outcomes, and named contributors where relevant.',
       '- If the story describes a process, include the essential steps in prose.',
       '- Keep it concise enough for an admin summary field.',
+      '- six_m_categories must only use: Manpower, Method, Material, Machine, Money, Market.',
+      '- Use the strict 6M meanings already present in the record.',
       `Current record:\n${JSON.stringify(buildPuterContext(story))}`,
     ].join('\n');
     const text = await runPuterChat(prompt);
@@ -581,7 +583,11 @@ async function rewriteSummaryWithPuter() {
     const rewritten = String(payload?.summary_of_work || text || '').trim();
     if (!rewritten) throw new Error('Puter did not return a rewritten summary.');
     editEls.storySummary.value = rewritten;
-    setPuterStatus('Summary updated from Puter AI. Review and save when ready.');
+    if (Array.isArray(payload?.six_m_categories)) {
+      editEls.sixMCategories.value = normalizeSixMValues((payload.six_m_categories || []).join(', ')).join(', ');
+      renderSixMPreview(editEls.sixMCategories.value);
+    }
+    setPuterStatus('Summary and 6M suggestions updated from Puter AI. Review and save when ready.');
   } catch (error) {
     setPuterStatus(error.message || 'Puter summary rewrite failed.', true);
   } finally {
