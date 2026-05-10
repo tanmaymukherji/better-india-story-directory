@@ -345,25 +345,34 @@ function renderTags(story) {
 
 function renderStoryCard(story) {
   return `
-    <article class="admin-card admin-search-card" data-story-card="${esc(story.story_uid)}">
-      <div class="vendor-result-top">
-        <div>
-          <h4>${esc(story.title || 'Untitled story')}</h4>
-          <p>${esc(story.person_name || 'Unknown person')} | ${esc(story.place_label || 'Place not listed')}</p>
+    <article class="vendor-result-card admin-search-card" data-story-card="${esc(story.story_uid)}">
+      <div class="vendor-result-card-head">
+        <div class="vendor-result-top">
+          <div>
+            <h4>${esc(story.title || 'Untitled story')}</h4>
+            <p>${esc(story.person_name || 'Unknown person')}</p>
+            <p>${esc(story.place_label || 'Place not listed')}</p>
+          </div>
+          <span class="admin-badge approved">${esc(story.thematic_area || 'General')}</span>
         </div>
-        <span class="admin-badge approved">${esc(story.thematic_area || 'General')}</span>
+        <div class="vendor-result-card-actions btn-group">
+          <a class="btn btn-small" href="./product-detail.html?story=${encodeURIComponent(story.story_uid)}">View Details</a>
+          <a class="btn btn-warning btn-small" href="${esc(story.story_url || '#')}" target="_blank" rel="noreferrer">View on Better India</a>
+        </div>
       </div>
-      <p><strong>Published:</strong> ${esc(formatPublishedDate(story.source_published_at))}</p>
-      <p>${esc(story.summary_of_work || story.story_excerpt || 'No summary saved yet.')}</p>
-      ${renderSixM(story)}
-      ${renderTags(story)}
-      <p><strong>Contact:</strong> ${esc(story.contact_email || 'No email')} | ${esc(story.contact_phone || 'No phone')}</p>
-      <div class="btn-group">
-        <a class="btn btn-small" href="./product-detail.html?story=${encodeURIComponent(story.story_uid)}">View Details</a>
-        <a class="btn btn-warning btn-small" href="${esc(story.story_url || '#')}" target="_blank" rel="noreferrer">View on Better India</a>
+      <div class="vendor-result-card-body">
+        <p><strong>Published:</strong> ${esc(formatPublishedDate(story.source_published_at))}</p>
+        <p>${esc(story.summary_of_work || story.story_excerpt || 'No summary saved yet.')}</p>
+        ${renderSixM(story)}
+        ${renderTags(story)}
+        <p><strong>Contact:</strong> ${esc(story.contact_email || 'No email')} | ${esc(story.contact_phone || 'No phone')}</p>
       </div>
     </article>
   `;
+}
+
+function getMapStories() {
+  return directoryState.hasSearched ? directoryState.filteredStories : [];
 }
 
 function renderResults() {
@@ -429,7 +438,6 @@ function goToPage(pageNumber) {
   renderResults();
   renderPagination();
   updateResultsSummary();
-  renderMapResults();
   persistSearchState();
 }
 
@@ -444,7 +452,7 @@ function showMapStoryPanel(story) {
   mapStoryPanelEl.innerHTML = `
     <div class="vendor-map-story-panel-header">
       <div>
-        <h4>${esc(story.title || 'Untitled story')}</h4>
+          <h4>${esc(story.title || 'Untitled story')}</h4>
         <p>${esc(story.person_name || 'Unknown person')} | ${esc(story.place_label || 'Place not listed')}</p>
       </div>
       <button type="button" class="vendor-map-story-panel-close" id="close-map-story-panel">Close</button>
@@ -657,15 +665,14 @@ async function renderMapResults() {
     }
     return;
   }
-  const pageResults = getPageResults();
+  const mapStories = getMapStories();
   setSelectedStory(directoryState.selectedStoryId);
 
   const mapReady = await ensureMap();
   if (!mapReady || !directoryState.map) return;
   clearMapMarkers();
   const points = [];
-  let markerCount = 0;
-  for (const story of pageResults) {
+  for (const story of mapStories) {
     const point = await geocodeStory(story);
     if (!point) continue;
     points.push(point);
@@ -688,7 +695,6 @@ async function renderMapResults() {
       persistSearchState();
     });
     directoryState.markers.push(marker);
-    markerCount += 1;
   }
   if (points.length > 1 && directoryState.map?.fitBounds) {
     const bounds = buildMapBounds(points);
