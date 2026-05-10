@@ -654,6 +654,66 @@ function buildMapBounds(points) {
   return [[minLng, minLat], [maxLng, maxLat]];
 }
 
+function fitMapToPoints(points) {
+  if (!directoryState.map || !points.length) return;
+  if (points.length === 1) {
+    directoryState.map?.setCenter?.(points[0]);
+    directoryState.map?.setZoom?.(8);
+    return;
+  }
+
+  const latitudes = points.map((point) => Number(point.lat)).filter((value) => Number.isFinite(value));
+  const longitudes = points.map((point) => Number(point.lng)).filter((value) => Number.isFinite(value));
+  if (!latitudes.length || !longitudes.length) return;
+
+  const minLat = Math.min(...latitudes);
+  const maxLat = Math.max(...latitudes);
+  const minLng = Math.min(...longitudes);
+  const maxLng = Math.max(...longitudes);
+  const boundsArray = [
+    [minLng, minLat],
+    [maxLng, maxLat],
+  ];
+  const boundsObject = {
+    north: maxLat,
+    south: minLat,
+    east: maxLng,
+    west: minLng,
+  };
+
+  try {
+    if (typeof directoryState.map?.fitBounds === 'function') {
+      try {
+        directoryState.map.fitBounds(boundsArray, { padding: 60, maxZoom: 8, duration: 0 });
+        return;
+      } catch {}
+      try {
+        directoryState.map.fitBounds(boundsArray, { padding: 60, maxZoom: 8 });
+        return;
+      } catch {}
+      try {
+        directoryState.map.fitBounds(boundsObject, { padding: 60, maxZoom: 8 });
+        return;
+      } catch {}
+      try {
+        directoryState.map.fitBounds(boundsArray);
+        return;
+      } catch {}
+    }
+  } catch {}
+
+  const center = {
+    lat: (minLat + maxLat) / 2,
+    lng: (minLng + maxLng) / 2,
+  };
+  const latSpan = Math.max(maxLat - minLat, 0.01);
+  const lngSpan = Math.max(maxLng - minLng, 0.01);
+  const maxSpan = Math.max(latSpan, lngSpan);
+  const fallbackZoom = maxSpan > 20 ? 4.4 : maxSpan > 10 ? 5.1 : maxSpan > 5 ? 5.8 : maxSpan > 2 ? 6.6 : 7.4;
+  directoryState.map?.setCenter?.(center);
+  directoryState.map?.setZoom?.(fallbackZoom);
+}
+
 async function renderMapResults() {
   if (!directoryState.hasSearched) {
     hideMapStoryPanel();
@@ -696,12 +756,8 @@ async function renderMapResults() {
     });
     directoryState.markers.push(marker);
   }
-  if (points.length > 1 && directoryState.map?.fitBounds) {
-    const bounds = buildMapBounds(points);
-    if (bounds) directoryState.map.fitBounds(bounds, { padding: 60, maxZoom: 8 });
-  } else if (points.length === 1 && directoryState.map?.setCenter) {
-    directoryState.map.setCenter(points[0]);
-    directoryState.map.setZoom?.(8);
+  if (points.length) {
+    fitMapToPoints(points);
   } else if (directoryState.map?.setCenter) {
     directoryState.map.setCenter(INDIA_CENTER);
     directoryState.map.setZoom?.(4.8);
