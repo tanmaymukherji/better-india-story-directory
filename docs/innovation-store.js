@@ -65,11 +65,29 @@ window.BetterIndiaStore = (() => {
     return Array.from(peopleMap.values()).sort((left, right) => left.person_name.localeCompare(right.person_name));
   }
 
-  async function loadStories() {
+  async function fetchAllStories(errorPrefix) {
     const supabase = getClient();
-    const result = await supabase.from(STORIES_TABLE()).select('*').order('source_published_at', { ascending: false }).order('title');
-    if (result.error) throw new Error(`Story load failed: ${result.error.message}`);
-    const stories = result.data || [];
+    const stories = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const result = await supabase
+        .from(STORIES_TABLE())
+        .select('*')
+        .order('source_published_at', { ascending: false })
+        .order('title')
+        .range(from, from + pageSize - 1);
+      if (result.error) throw new Error(`${errorPrefix}: ${result.error.message}`);
+      const batch = result.data || [];
+      stories.push(...batch);
+      if (batch.length < pageSize) break;
+      from += pageSize;
+    }
+    return stories;
+  }
+
+  async function loadStories() {
+    const stories = await fetchAllStories('Story load failed');
     return {
       stories,
       people: groupPeople(stories),
@@ -77,11 +95,9 @@ window.BetterIndiaStore = (() => {
   }
 
   async function loadAdminData() {
-    const supabase = getClient();
-    const result = await supabase.from(STORIES_TABLE()).select('*').order('source_published_at', { ascending: false }).order('title');
-    if (result.error) throw new Error(`Admin story load failed: ${result.error.message}`);
+    const stories = await fetchAllStories('Admin story load failed');
     return {
-      stories: result.data || [],
+      stories,
     };
   }
 
@@ -113,4 +129,3 @@ window.BetterIndiaStore = (() => {
     groupPeople,
   };
 })();
-

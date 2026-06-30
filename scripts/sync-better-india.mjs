@@ -21,6 +21,7 @@ const BETTER_INDIA_LISTING_URL = `${BETTER_INDIA_BASE_URL}/stories`;
 const MAX_STORIES_PER_RUN = 10;
 const LATEST_STORY_CHECKS_PER_RUN = 3;
 const MAX_COMPILATION_LINKS_PER_STORY = Math.max(2, Number(process.env.MAX_COMPILATION_LINKS_PER_STORY || 4));
+const MAX_EXPANSION_ATTEMPTS_PER_RUN = Math.max(10, Number(process.env.MAX_EXPANSION_ATTEMPTS_PER_RUN || 40));
 const GEMINI_REQUEST_DELAY_MS = Math.max(0, Number(process.env.GEMINI_REQUEST_DELAY_MS || 750));
 const GEMINI_MAX_STORY_CHARS = Math.max(3000, Number(process.env.GEMINI_MAX_STORY_CHARS || 9000));
 const STALE_RUN_MINUTES = Math.max(5, Number(process.env.BETTER_INDIA_STALE_RUN_MINUTES || 10));
@@ -168,7 +169,7 @@ function isStoryUrl(url) {
     if (!/thebetterindia\.com$/i.test(parsed.hostname)) return false;
     const segments = getPathSegments(url);
     if (!segments.length) return false;
-    if (['stories', 'author', 'web-stories', 'tag', 'category'].includes(segments[0]?.toLowerCase?.())) return false;
+    if (['stories', 'author', 'web-stories', 'tag', 'tags', 'category'].includes(segments[0]?.toLowerCase?.())) return false;
     if (segments.length === 1) return looksLikeStorySlug(segments[0]);
     return looksLikeStorySlug(segments[segments.length - 1]);
   } catch {
@@ -1070,13 +1071,17 @@ async function runSync() {
 
     const queue = [...selection.selected];
     const queuedUrls = new Set(queue.map((item) => item.detailUrl));
+    const attemptedUrls = new Set();
     const seenStoryIds = new Set();
+    let expansionAttempts = 0;
 
     while (queue.length && processedCount < MAX_STORIES_PER_RUN) {
       ensureSyncWithinLimit(syncStartedAt);
       const listingItem = queue.shift();
       if (!listingItem?.detailUrl) continue;
       queuedUrls.delete(listingItem.detailUrl);
+      if (attemptedUrls.has(listingItem.detailUrl)) continue;
+      attemptedUrls.add(listingItem.detailUrl);
       const storyUid = storyUidFromUrl(listingItem.detailUrl);
       if (existingStoryIds.has(storyUid) || seenStoryIds.has(storyUid) || !isStoryUrl(listingItem.detailUrl)) continue;
       console.log(`[sync] Starting story ${processedCount + 1}/${MAX_STORIES_PER_RUN}: ${listingItem.detailUrl}`);
@@ -1084,20 +1089,27 @@ async function runSync() {
 
       const html = await fetchText(listingItem.detailUrl);
       const parsedStory = parseStoryPage(html, listingItem);
-      if (shouldExpandCompilationStory(listingItem, parsedStory)) {
+      if (shouldExpandCompilationStory(listingItem, parsedStory) && expansionAttempts < MAX_EXPANSION_ATTEMPTS_PER_RUN) {
+        expansionAttempts += 1;
         const children = buildCompilationChildren(listingItem, parsedStory)
           .filter((child) => {
             const childUid = storyUidFromUrl(child.detailUrl);
-            return !existingStoryIds.has(childUid) && !seenStoryIds.has(childUid) && !queuedUrls.has(child.detailUrl);
+            return isStoryUrl(child.detailUrl) &&
+              !existingStoryIds.has(childUid) &&
+              !seenStoryIds.has(childUid) &&
+              !queuedUrls.has(child.detailUrl) &&
+              !attemptedUrls.has(child.detailUrl);
           });
         if (children.length) {
-          console.log(`[sync] Expanded compilation story into ${children.length} child stories: ${listingItem.detailUrl}`);
+          console.log(`[sync] Expanded compilation story into ${children.length} child stories (${expansionAttempts}/${MAX_EXPANSION_ATTEMPTS_PER_RUN}): ${listingItem.detailUrl}`);
           [...children].reverse().forEach((child) => {
             queue.unshift(child);
             queuedUrls.add(child.detailUrl);
           });
           continue;
         }
+      } else if (shouldExpandCompilationStory(listingItem, parsedStory)) {
+        console.log(`[sync] Expansion limit reached; summarizing parent story instead: ${listingItem.detailUrl}`);
       }
 
       const { aiModel, summary: aiSummary } = await summarizeStory(listingItem, parsedStory, syncStartedAt);
